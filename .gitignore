@@ -1,0 +1,28 @@
+# Dependency directories
+node_modules/
+backend/.venv/
+backend/__pycache__/
+backend/.pytest_cache/
+.pytest_cache/
+__pycache__/
+
+# Build outputs
+dist/
+build/
+frontend/dist/
+
+# Local configuration and credentials (CRITICAL: Do not commit API keys!)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+frontend/.env
+backend/.env
+
+# IDE, Editor, and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
