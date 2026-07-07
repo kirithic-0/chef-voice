@@ -128,7 +128,7 @@ async def get_recipes(request: Request):
     url = f"{SUPABASE_URL}/rest/v1/recipes"
     headers = {
         "apikey": SUPABASE_SERVICE_KEY,
-        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+        "Authorization": f"Bearer {token}",
         "Content-Type": "application/json"
     }
     params = {
@@ -163,7 +163,7 @@ async def search_recipes(query: str, request: Request):
         url = f"{SUPABASE_URL}/rest/v1/rpc/match_recipes"
         headers = {
             "apikey": SUPABASE_SERVICE_KEY,
-            "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+            "Authorization": f"Bearer {token}",
             "Content-Type": "application/json"
         }
         payload = {
@@ -190,7 +190,7 @@ async def get_recipe(recipe_id: str, request: Request):
     url = f"{SUPABASE_URL}/rest/v1/recipes"
     headers = {
         "apikey": SUPABASE_SERVICE_KEY,
-        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+        "Authorization": f"Bearer {token}",
         "Content-Type": "application/json"
     }
     params = {
@@ -210,6 +210,107 @@ async def get_recipe(recipe_id: str, request: Request):
         except Exception as e:
             print(f"Error fetching recipe {recipe_id}: {e}")
             raise HTTPException(status_code=500, detail=str(e))
+
+async def check_is_admin(user_id: str, token: str) -> bool:
+    url = f"{SUPABASE_URL}/rest/v1/profiles"
+    headers = {
+        "apikey": SUPABASE_SERVICE_KEY,
+        "Authorization": f"Bearer {token}"
+    }
+    params = {
+        "select": "is_admin",
+        "id": f"eq.{user_id}"
+    }
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.get(url, headers=headers, params=params)
+            if resp.status_code == 200:
+                profiles = resp.json()
+                if profiles and len(profiles) > 0:
+                    return bool(profiles[0].get("is_admin", False))
+            return False
+        except Exception as e:
+            print(f"Error checking admin status: {e}")
+            return False
+
+@app.post("/recipes")
+async def create_recipe(request: Request, recipe_data: dict):
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        raise HTTPException(status_code=500, detail="Supabase environment variables are not configured.")
+    
+    token = get_token_from_header(request)
+    user = await get_user_from_token(token)
+    user_id = user["id"]
+    
+    is_admin = await check_is_admin(user_id, token)
+    if not is_admin:
+        raise HTTPException(status_code=403, detail="Forbidden: Admin access required.")
+    
+    required_fields = ["title", "cuisine", "time", "difficulty", "servings", "ingredients", "steps"]
+    for field in required_fields:
+        if field not in recipe_data:
+            raise HTTPException(status_code=400, detail=f"Missing required field: {field}")
+            
+    ingredients = recipe_data.get("ingredients", [])
+    ingredients_list = []
+    for ing in ingredients:
+        name = ing.get("name", "")
+        amount = ing.get("amount", "")
+        unit = ing.get("unit", "")
+        ingredients_list.append(f"{amount} {unit} {name}".strip())
+    ingredients_str = ", ".join(ingredients_list)
+    
+    text_to_encode = f"Title: {recipe_data['title']}. Cuisine: {recipe_data['cuisine']}. Difficulty: {recipe_data['difficulty']}. Ingredients: {ingredients_str}."
+    
+    try:
+        query_embedding_arr = await run_in_threadpool(embedding_model.encode, text_to_encode)
+        recipe_data["embedding"] = query_embedding_arr.tolist()
+        
+        url = f"{SUPABASE_URL}/rest/v1/recipes"
+        headers = {
+            "apikey": SUPABASE_SERVICE_KEY,
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "Prefer": "return=representation"
+        }
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(url, headers=headers, json=recipe_data)
+            resp.raise_for_status()
+            return resp.json()[0]
+    except Exception as e:
+        print(f"Error creating recipe: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/recipes/{recipe_id}")
+async def delete_recipe(recipe_id: str, request: Request):
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        raise HTTPException(status_code=500, detail="Supabase environment variables are not configured.")
+        
+    token = get_token_from_header(request)
+    user = await get_user_from_token(token)
+    user_id = user["id"]
+    
+    is_admin = await check_is_admin(user_id, token)
+    if not is_admin:
+        raise HTTPException(status_code=403, detail="Forbidden: Admin access required.")
+        
+    try:
+        url = f"{SUPABASE_URL}/rest/v1/recipes"
+        headers = {
+            "apikey": SUPABASE_SERVICE_KEY,
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+        params = {
+            "id": f"eq.{recipe_id}"
+        }
+        async with httpx.AsyncClient() as client:
+            resp = await client.delete(url, headers=headers, params=params)
+            resp.raise_for_status()
+            return {"status": "success", "message": f"Recipe {recipe_id} deleted successfully."}
+    except Exception as e:
+        print(f"Error deleting recipe: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.websocket("/ws/chat")
 async def websocket_chat(client_ws: WebSocket):
@@ -333,7 +434,12 @@ async def websocket_chat(client_ws: WebSocket):
         recipe_context = "None"
         step_context = "None"
         if recipe:
-            recipe_context = f"Title: {recipe.get('title')}\nCuisine: {recipe.get('cuisine')}\nIngredients: {json.dumps(recipe.get('ingredients'))}"
+            recipe_context = (
+                f"Title: {recipe.get('title')}\n"
+                f"Cuisine: {recipe.get('cuisine')}\n"
+                f"Ingredients: {json.dumps(recipe.get('ingredients'))}\n"
+                f"All Recipe Steps: {json.dumps(recipe.get('steps'))}"
+            )
             steps = recipe.get("steps", [])
             if 0 <= current_step_idx < len(steps):
                 curr_step = steps[current_step_idx]
@@ -358,11 +464,13 @@ async def websocket_chat(client_ws: WebSocket):
             f"User Allergies: {allergies_str}\n"
             f"User Dietary Preferences: {dietary_str}\n\n"
             "ALLERGEN RULE: Do NOT verbally warn the user about allergies or dietary preferences in your response text. The frontend UI already handles showing allergen warnings, so you do not need to repeat them in every turn unless the user explicitly asks you about ingredients or safety.\n\n"
+            "STEP READING RULE: When navigating to a new step (e.g., moving next or previous), repeating a step, or when the user asks what the step is, your 'text' response MUST read out that target step's instructions completely and verbatim from the 'All Recipe Steps' list. Do NOT summarize, shorten, or omit details of the recipe step instructions. For example, if the current step is Step 1 and the user says 'next', look up Step 2 in the steps list and read its text completely. You may prefix it with the step number (e.g., 'Step 2: [step text]') and optionally append a short question (e.g., 'Let me know when you are ready.').\n\n"
+            "COOKING QUESTIONS RULE: If the user asks a question, requests an ingredient substitution, or seeks clarification about the recipe or cooking process (e.g., 'Am I supposed to serve the chicken or the salt?'), your 'text' response MUST answer their question directly and concisely. Do NOT repeat or read out the active step instructions in full when answering general questions; just answer the question directly and keep the action type as 'none'.\n\n"
             "NAVIGATION RULE: You are a state router. You must inspect the 'Current Active Cooking Step' (e.g., 'Step 3 of 4'). The final step is the last number (e.g. 4). Do NOT say the recipe is completed or there are no more steps unless the user is already on the final step (e.g. Step 4 of 4) and says they are done. If the user is on an earlier step (e.g., Step 3 of 4) and says 'done', 'next', 'ready', or 'move on', you MUST return action type 'next_step' so the frontend can increment the step.\n\n"
             "You must respond ONLY with a JSON object. Do not include markdown code block formatting (like ```json). Just return raw JSON.\n"
             "The JSON object must follow this schema:\n"
             "{\n"
-            '  "text": "Your spoken reply to the user. Keep it under 2 sentences since it is read aloud. Read steps clearly. Keep it concise.",\n'
+            '  "text": "Your spoken reply to the user. Answer cooking questions directly and concisely. If navigating or repeating a step, read the active step instructions in full.",\n'
             '  "action": {\n'
             '    "type": "next_step" | "prev_step" | "repeat_step" | "set_timer" | "cancel_timer" | "search_recipes" | "select_recipe" | "start_cooking" | "none",\n'
             '    "params": {\n'

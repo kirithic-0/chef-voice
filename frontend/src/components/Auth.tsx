@@ -35,7 +35,7 @@ export default function Auth({ onAuthSuccess, onClose }: AuthProps) {
         setSuccessMsg('Account created successfully! Logging you in...');
         setTimeout(() => {
           onAuthSuccess();
-          onClose();
+          onClose?.();
         }, 1500);
       } else {
         const { error } = await supabase.auth.signInWithPassword({
@@ -46,7 +46,7 @@ export default function Auth({ onAuthSuccess, onClose }: AuthProps) {
         setSuccessMsg('Logged in successfully!');
         setTimeout(() => {
           onAuthSuccess();
-          onClose();
+          onClose?.();
         }, 1000);
       }
     } catch (err: any) {
@@ -58,14 +58,14 @@ export default function Auth({ onAuthSuccess, onClose }: AuthProps) {
   };
 
   return (
-    <div className="fixed inset-0 bg-neutral-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl overflow-hidden border border-neutral-100 flex flex-col p-8 relative animate-in fade-in zoom-in-95 duration-200">
+    <div className="fixed inset-0 bg-[#2C2C24]/30 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div className="bg-[#FEFEFA] rounded-[2rem] w-full max-w-md shadow-float overflow-hidden border border-[#DED8CF]/50 flex flex-col p-10 relative animate-in fade-in zoom-in-95 duration-500">
         
         {/* Close Button */}
         {onClose && (
           <button
             onClick={onClose}
-            className="absolute top-6 right-6 text-neutral-400 hover:text-neutral-600 transition-colors p-1 rounded-full hover:bg-neutral-50 cursor-pointer"
+            className="absolute top-6 right-6 text-[#78786C] hover:text-[#2C2C24] transition-colors p-2 rounded-full hover:bg-[#F0EBE5] cursor-pointer"
           >
             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-5 h-5">
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -74,31 +74,31 @@ export default function Auth({ onAuthSuccess, onClose }: AuthProps) {
         )}
 
         {/* Title */}
-        <div className="mb-6 space-y-1 text-center">
-          <h2 className="text-2xl font-black tracking-tight text-neutral-900">
-            {isRegister ? 'Create an Account' : 'Welcome Back'}
+        <div className="mb-8 space-y-2 text-center">
+          <h2 className="text-3xl font-serif font-bold text-[#2C2C24]">
+            {isRegister ? 'Create Account' : 'Welcome Back'}
           </h2>
-          <p className="text-neutral-500 text-sm font-light">
+          <p className="text-[#78786C] text-sm font-sans">
             {isRegister ? 'Choose a username to customize recipes' : 'Sign in to access your kitchen profile'}
           </p>
         </div>
 
         {/* Success/Error Alerts */}
         {errorMsg && (
-          <div className="bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded-2xl text-xs font-semibold mb-4">
-            ⚠️ {errorMsg}
+          <div className="bg-[#A85448]/10 border border-[#A85448]/20 text-[#A85448] px-5 py-3 rounded-[1.5rem] text-sm font-semibold mb-6">
+            {errorMsg}
           </div>
         )}
         {successMsg && (
-          <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 px-4 py-3 rounded-2xl text-xs font-semibold mb-4">
-            ✅ {successMsg}
+          <div className="bg-[#5D7052]/10 border border-[#5D7052]/20 text-[#5D7052] px-5 py-3 rounded-[1.5rem] text-sm font-semibold mb-6">
+            {successMsg}
           </div>
         )}
 
         {/* Form */}
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-5">
           <div>
-            <label className="block text-xs font-bold text-neutral-400 uppercase tracking-wider mb-2">
+            <label className="block text-xs font-bold text-[#78786C] uppercase tracking-wider mb-2 pl-4">
               Username
             </label>
             <input
@@ -107,12 +107,12 @@ export default function Auth({ onAuthSuccess, onClose }: AuthProps) {
               placeholder="e.g. kirithic"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              className="w-full bg-neutral-50 border border-neutral-200 focus:border-amber-500 focus:ring-2 focus:ring-amber-100 rounded-2xl py-3.5 px-4 text-sm font-medium focus:outline-none transition-all"
+              className="w-full bg-white/50 border border-[#DED8CF] focus:border-transparent focus:ring-2 focus:ring-[#5D7052]/30 rounded-full h-12 px-6 text-sm font-sans focus:outline-none transition-all shadow-sm"
             />
           </div>
 
           <div>
-            <label className="block text-xs font-bold text-neutral-400 uppercase tracking-wider mb-2">
+            <label className="block text-xs font-bold text-[#78786C] uppercase tracking-wider mb-2 pl-4">
               Password
             </label>
             <input
@@ -122,17 +122,17 @@ export default function Auth({ onAuthSuccess, onClose }: AuthProps) {
               placeholder="••••••••"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full bg-neutral-50 border border-neutral-200 focus:border-amber-500 focus:ring-2 focus:ring-amber-100 rounded-2xl py-3.5 px-4 text-sm font-medium focus:outline-none transition-all"
+              className="w-full bg-white/50 border border-[#DED8CF] focus:border-transparent focus:ring-2 focus:ring-[#5D7052]/30 rounded-full h-12 px-6 text-sm font-sans focus:outline-none transition-all shadow-sm"
             />
           </div>
 
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-bold py-4 rounded-2xl shadow-lg shadow-orange-500/10 active:scale-[0.99] transition-all flex items-center justify-center gap-2 cursor-pointer mt-6"
+            className="w-full bg-[#5D7052] text-[#F3F4F1] font-bold h-12 rounded-full shadow-soft hover:shadow-hover hover:scale-105 active:scale-95 transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer mt-8 px-8"
           >
             {loading ? (
-              <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+              <div className="w-5 h-5 border-2 border-[#F3F4F1] border-t-transparent rounded-full animate-spin" />
             ) : (
               isRegister ? 'Sign Up' : 'Sign In'
             )}
@@ -140,14 +140,14 @@ export default function Auth({ onAuthSuccess, onClose }: AuthProps) {
         </form>
 
         {/* Toggle Switch */}
-        <div className="mt-6 text-center">
+        <div className="mt-8 text-center">
           <button
             onClick={() => {
               setIsRegister(!isRegister);
               setErrorMsg('');
               setSuccessMsg('');
             }}
-            className="text-xs text-amber-600 hover:text-amber-700 font-semibold cursor-pointer"
+            className="text-sm text-[#C18C5D] hover:text-[#A85448] font-bold transition-colors cursor-pointer"
           >
             {isRegister ? 'Already have an account? Sign In' : "Don't have an account? Sign Up"}
           </button>

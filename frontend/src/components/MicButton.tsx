@@ -14,13 +14,18 @@ export default function MicButton({ status, onClick }: MicButtonProps) {
 
   const isDisabled = isThinking || isSpeaking || isConnecting;
 
-  let btnClasses = "w-16 h-16 rounded-full flex items-center justify-center transition-all duration-300 ";
+  let btnClasses = "w-16 h-16 rounded-full flex items-center justify-center transition-all duration-300 shadow-soft group ";
+  let iconClasses = "w-6 h-6 transition-colors duration-300 ";
+  
   if (isRecording) {
-    btnClasses += "bg-red-500 text-white ring-4 ring-red-100 animate-pulse";
+    btnClasses += "bg-[#A85448] text-white ring-4 ring-[#A85448]/30 animate-pulse";
+    iconClasses += "text-white";
   } else if (isDisabled) {
-    btnClasses += "bg-neutral-200 text-neutral-400 cursor-not-allowed";
+    btnClasses += "bg-[#F0EBE5] text-[#78786C] cursor-not-allowed shadow-none";
+    iconClasses += "text-[#78786C]";
   } else {
-    btnClasses += "bg-neutral-900 text-white hover:bg-neutral-800 active:scale-95 cursor-pointer";
+    btnClasses += "bg-[#5D7052]/10 hover:bg-[#5D7052] active:scale-95 cursor-pointer hover:shadow-hover";
+    iconClasses += "text-[#5D7052] group-hover:text-white";
   }
 
   let statusText = "";
@@ -30,7 +35,7 @@ export default function MicButton({ status, onClick }: MicButtonProps) {
   else if (isSpeaking) statusText = "Speaking...";
 
   return (
-    <div className="flex flex-col items-center gap-2">
+    <div className="flex flex-col items-center gap-3">
       <button
         onClick={isDisabled ? undefined : onClick}
         className={btnClasses}
@@ -43,7 +48,7 @@ export default function MicButton({ status, onClick }: MicButtonProps) {
           viewBox="0 0 24 24"
           strokeWidth={1.8}
           stroke="currentColor"
-          className="w-6 h-6"
+          className={iconClasses}
         >
           <path
             strokeLinecap="round"
@@ -54,7 +59,7 @@ export default function MicButton({ status, onClick }: MicButtonProps) {
       </button>
       <div className="h-5">
         {statusText && (
-          <span className={`text-[12px] font-medium tracking-wide uppercase select-none ${isRecording ? 'text-red-500' : 'text-neutral-400'}`}>
+          <span className={`text-[12px] font-sans font-bold tracking-wider uppercase select-none ${isRecording ? 'text-[#A85448]' : 'text-[#78786C]'}`}>
             {statusText}
           </span>
         )}

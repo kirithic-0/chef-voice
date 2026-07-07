@@ -17,17 +17,17 @@ export default function TimerWidget({ timers, onCancel, onAddSeconds }: TimerWid
   if (timers.length === 0) return null;
 
   return (
-    <div className="space-y-3 max-w-sm w-full bg-neutral-900/95 border border-neutral-800 rounded-2xl p-4 shadow-xl text-white">
-      <div className="flex items-center justify-between pb-2 border-b border-neutral-800">
-        <h4 className="text-xs font-bold text-neutral-400 uppercase tracking-wider flex items-center gap-1.5">
-          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.2} stroke="currentColor" className="w-4 h-4 text-amber-500 animate-pulse">
+    <div className="space-y-4 max-w-sm w-full bg-white/70 backdrop-blur-md border border-[#DED8CF]/50 rounded-[2rem] p-5 shadow-float text-[#2C2C24]">
+      <div className="flex items-center justify-between pb-3 border-b border-[#DED8CF]/30">
+        <h4 className="text-xs font-bold text-[#78786C] uppercase tracking-wider flex items-center gap-2">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.2} stroke="currentColor" className="w-4 h-4 text-[#C18C5D] animate-pulse">
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
           Active Timers ({timers.length})
         </h4>
       </div>
 
-      <div className="space-y-3 max-h-48 overflow-y-auto pr-1">
+      <div className="space-y-4 max-h-48 overflow-y-auto pr-1">
         {timers.map((timer) => {
           const isDone = timer.timeLeft === 0;
           const progressPercent = timer.duration > 0 ? (timer.timeLeft / timer.duration) * 100 : 0;
@@ -35,27 +35,27 @@ export default function TimerWidget({ timers, onCancel, onAddSeconds }: TimerWid
           return (
             <div 
               key={timer.id} 
-              className={`p-3 rounded-xl border transition-all duration-300 ${
+              className={`p-4 rounded-[1.5rem] border transition-all duration-300 ${
                 isDone 
-                  ? 'bg-red-500/10 border-red-500/30 animate-bounce' 
-                  : 'bg-neutral-800/50 border-neutral-850'
+                  ? 'bg-[#A85448]/10 border-[#A85448]/30 animate-bounce' 
+                  : 'bg-white/50 border-[#DED8CF]'
               }`}
             >
               <div className="flex items-center justify-between gap-3">
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-neutral-200 truncate">
+                  <p className="text-sm font-semibold text-[#4A4A40] truncate font-sans">
                     {timer.label}
                   </p>
-                  <p className={`text-2xl font-black tabular-nums tracking-tight ${isDone ? 'text-red-400' : 'text-neutral-100'}`}>
-                    {isDone ? 'ALARM! 🚨' : formatTime(timer.timeLeft)}
+                  <p className={`text-3xl font-serif font-bold tabular-nums tracking-tight mt-1 ${isDone ? 'text-[#A85448]' : 'text-[#2C2C24]'}`}>
+                    {isDone ? 'ALARM!' : formatTime(timer.timeLeft)}
                   </p>
                 </div>
 
-                <div className="flex items-center gap-1">
+                <div className="flex items-center gap-2">
                   {!isDone && (
                     <button
                       onClick={() => onAddSeconds(timer.id, 60)}
-                      className="text-[10px] font-bold text-neutral-300 bg-neutral-800 border border-neutral-700 hover:bg-neutral-700 px-2 py-1.5 rounded-lg transition-colors active:scale-95 cursor-pointer"
+                      className="text-[10px] font-bold text-[#5D7052] bg-[#5D7052]/10 border border-[#5D7052]/20 hover:bg-[#5D7052]/20 px-3 py-2 rounded-full transition-colors active:scale-95 cursor-pointer"
                       title="Add 1 minute"
                     >
                       +1 Min
@@ -63,10 +63,10 @@ export default function TimerWidget({ timers, onCancel, onAddSeconds }: TimerWid
                   )}
                   <button
                     onClick={() => onCancel(timer.id)}
-                    className="text-neutral-400 hover:text-red-400 p-1.5 rounded-lg hover:bg-red-500/10 transition-colors active:scale-95 cursor-pointer"
+                    className="text-[#78786C] hover:text-[#A85448] p-2 rounded-full hover:bg-[#A85448]/10 transition-colors active:scale-95 cursor-pointer"
                     title="Cancel Timer"
                   >
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5">
                       <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
                     </svg>
                   </button>
@@ -74,9 +74,9 @@ export default function TimerWidget({ timers, onCancel, onAddSeconds }: TimerWid
               </div>
 
               {!isDone && (
-                <div className="w-full bg-neutral-800 h-1.5 rounded-full mt-2.5 overflow-hidden">
+                <div className="w-full bg-[#DED8CF]/40 h-2 rounded-full mt-3 overflow-hidden">
                   <div 
-                    className="bg-amber-500 h-full rounded-full transition-all duration-1000 ease-linear"
+                    className="bg-[#5D7052] h-full rounded-full transition-all duration-1000 ease-linear"
                     style={{ width: `${progressPercent}%` }}
                   />
                 </div>

@@ -24,6 +24,8 @@ export interface Recipe {
   steps: Step[];
   embedding?: number[];
   created_at?: string;
+  average_rating?: number;
+  rating_count?: number;
 }
 
 export interface Timer {
@@ -55,6 +57,7 @@ export interface UserProfile {
   email: string | null;
   allergies: string[];
   dietary_preferences: string[];
+  is_admin?: boolean;
 }
 
 export interface Favorite {

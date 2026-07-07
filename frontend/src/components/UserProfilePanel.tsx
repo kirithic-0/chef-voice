@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { supabase, getUserProfile, updateUserProfile, getUserFavorites, getCookingHistory } from '../lib/supabase';
+import { supabase, getUserProfile, updateUserProfile, getUserFavorites, getCookingHistory, updateAdminStatus } from '../lib/supabase';
 import { UserProfile, Favorite, CookingHistoryEntry, Recipe } from '../types';
 
 interface UserProfilePanelProps {
@@ -10,18 +10,10 @@ interface UserProfilePanelProps {
   onClose: () => void;
   onSelectRecipe: (recipe: Recipe) => void;
   onLogout: () => void;
+  onProfileUpdate?: () => void;
 }
 
-const COMMON_ALLERGENS = [
-  'Peanuts',
-  'Dairy',
-  'Egg',
-  'Gluten',
-  'Soy',
-  'Tree Nuts',
-  'Fish',
-  'Shellfish'
-];
+
 
 export default function UserProfilePanel({
   userId,
@@ -30,13 +22,14 @@ export default function UserProfilePanel({
   isOpen,
   onClose,
   onSelectRecipe,
-  onLogout
+  onLogout,
+  onProfileUpdate
 }: UserProfilePanelProps) {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [favorites, setFavorites] = useState<Favorite[]>([]);
   const [history, setHistory] = useState<CookingHistoryEntry[]>([]);
   const [loading, setLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<'allergies' | 'favorites' | 'history'>('allergies');
+  const [activeTab, setActiveTab] = useState<'favorites' | 'history'>('favorites');
 
   useEffect(() => {
     if (isOpen && userId) {
@@ -62,25 +55,23 @@ export default function UserProfilePanel({
     }
   };
 
-  const handleAllergyToggle = async (allergen: string) => {
-    if (!profile) return;
-    
-    let nextAllergies = [...profile.allergies];
-    if (nextAllergies.includes(allergen)) {
-      nextAllergies = nextAllergies.filter(a => a !== allergen);
-    } else {
-      nextAllergies.push(allergen);
-    }
 
+
+  const handleAdminToggle = async () => {
+    if (!profile) return;
+    const nextAdmin = !profile.is_admin;
     try {
-      await updateUserProfile(userId, nextAllergies, profile.dietary_preferences);
+      await updateAdminStatus(userId, nextAdmin);
       setProfile({
         ...profile,
-        allergies: nextAllergies
+        is_admin: nextAdmin
       });
+      if (onProfileUpdate) {
+        onProfileUpdate();
+      }
     } catch (err) {
-      console.error('Failed to update allergies:', err);
-      alert('Error updating allergies list.');
+      console.error('Failed to update admin status:', err);
+      alert('Error updating admin status.');
     }
   };
 
@@ -95,30 +86,41 @@ export default function UserProfilePanel({
     <>
       {/* Backdrop */}
       <div
-        className="fixed inset-0 bg-neutral-900/40 z-40 backdrop-blur-[2px]"
+        className="fixed inset-0 bg-[#2C2C24]/30 z-40 backdrop-blur-sm"
         onClick={onClose}
       />
 
       {/* Sliding Panel */}
-      <div className="fixed top-0 right-0 h-full w-full max-w-lg bg-white border-l border-neutral-200 z-50 shadow-2xl transition-transform duration-300 flex flex-col">
+      <div className="fixed top-0 right-0 h-full w-full max-w-lg bg-[#FEFEFA] border-l border-[#DED8CF]/50 z-50 shadow-float transition-transform duration-500 flex flex-col font-sans">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-5 border-b border-neutral-100 bg-neutral-50/50">
+        <div className="flex items-center justify-between px-8 py-6 border-b border-[#DED8CF]/30 bg-[#FDFCF8]">
           <div>
-            <h2 className="text-xl font-black text-neutral-900">Your Kitchen Profile</h2>
-            <p className="text-xs text-neutral-400 font-medium">{userEmail.split('@')[0]}</p>
+            <h2 className="text-2xl font-serif font-bold text-[#2C2C24]">Your Kitchen Profile</h2>
+            <p className="text-sm text-[#78786C] font-medium">{userEmail.split('@')[0]}</p>
+            {profile && (
+              <label className="flex items-center gap-2 mt-3 cursor-pointer select-none">
+                <input 
+                  type="checkbox" 
+                  checked={profile.is_admin || false} 
+                  onChange={handleAdminToggle}
+                  className="rounded text-[#C18C5D] focus:ring-[#C18C5D]/30 w-4 h-4 cursor-pointer accent-[#C18C5D]"
+                />
+                <span className="text-[11px] font-bold uppercase tracking-wider text-[#C18C5D]">Admin Mode</span>
+              </label>
+            )}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-4">
             <button
               onClick={onLogout}
-              className="text-xs font-bold text-red-500 hover:text-red-600 bg-red-50 hover:bg-red-100 px-3 py-1.5 rounded-lg transition-colors cursor-pointer"
+              className="text-xs font-bold text-[#A85448] hover:text-white bg-[#A85448]/10 hover:bg-[#A85448] px-4 py-2 rounded-full transition-colors cursor-pointer"
             >
               Sign Out
             </button>
             <button
               onClick={onClose}
-              className="p-1.5 rounded-full hover:bg-neutral-100 transition-colors text-neutral-400 hover:text-neutral-600 cursor-pointer"
+              className="p-2 rounded-full hover:bg-[#F0EBE5] transition-colors text-[#78786C] hover:text-[#2C2C24] cursor-pointer"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-5 h-5">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-6 h-6">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
@@ -126,73 +128,42 @@ export default function UserProfilePanel({
         </div>
 
         {/* Tab Selection */}
-        <div className="flex border-b border-neutral-100 text-sm font-semibold select-none bg-neutral-50/20">
-          {(['allergies', 'favorites', 'history'] as const).map((tab) => (
+        <div className="flex border-b border-[#DED8CF]/30 text-sm font-semibold select-none bg-[#F0EBE5]/30">
+          {(['favorites', 'history'] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
-              className={`flex-1 py-3 text-center border-b-2 transition-all cursor-pointer capitalize ${
+              className={`flex-1 py-4 text-center border-b-2 transition-all duration-300 cursor-pointer capitalize ${
                 activeTab === tab
-                  ? 'border-amber-500 text-amber-600 font-bold bg-white'
-                  : 'border-transparent text-neutral-450 hover:text-neutral-700'
+                  ? 'border-[#5D7052] text-[#5D7052] font-bold bg-[#FEFEFA]'
+                  : 'border-transparent text-[#78786C] hover:text-[#2C2C24]'
               }`}
             >
-              {tab === 'allergies' ? '🛡️ Allergies' : tab === 'favorites' ? '❤️ Favorites' : '⏱️ History'}
+              {tab}
             </button>
           ))}
         </div>
 
         {/* Tab Body */}
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex-1 overflow-y-auto p-8 relative">
+          <div className="absolute top-0 right-0 w-64 h-64 bg-[#C18C5D]/5 blob-3 blur-3xl -z-10" />
+          
           {loading ? (
-            <div className="flex flex-col items-center justify-center h-48 gap-2">
-              <div className="w-8 h-8 border-3 border-amber-500 border-t-transparent rounded-full animate-spin" />
-              <span className="text-neutral-400 text-xs font-semibold animate-pulse">Loading profile data...</span>
+            <div className="flex flex-col items-center justify-center h-48 gap-3">
+              <div className="w-8 h-8 border-3 border-[#5D7052] border-t-transparent rounded-full animate-spin" />
+              <span className="text-[#78786C] text-sm font-semibold animate-pulse">Loading profile data...</span>
             </div>
           ) : (
             <>
-              {/* 1. Allergies Tab */}
-              {activeTab === 'allergies' && profile && (
-                <div className="space-y-4">
-                  <div className="bg-amber-50/60 border border-amber-100 p-4 rounded-2xl">
-                    <p className="text-xs text-amber-800 leading-relaxed font-medium">
-                      Select any food allergies you have. The voice assistant will automatically check ingredients and warn you during active cooking steps!
-                    </p>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    {COMMON_ALLERGENS.map((allergen) => {
-                      const isChecked = profile.allergies.includes(allergen);
-                      return (
-                        <button
-                          key={allergen}
-                          onClick={() => handleAllergyToggle(allergen)}
-                          className={`flex items-center justify-between p-3.5 rounded-2xl border text-sm font-semibold transition-all cursor-pointer ${
-                            isChecked
-                              ? 'bg-amber-50 border-amber-300 text-amber-900 shadow-sm shadow-amber-100/50'
-                              : 'bg-white border-neutral-150 text-neutral-600 hover:border-neutral-200'
-                          }`}
-                        >
-                          <span>{allergen}</span>
-                          {isChecked ? (
-                            <span className="text-amber-600 text-xs">🛡️</span>
-                          ) : (
-                            <span className="w-1.5 h-1.5 rounded-full bg-neutral-200" />
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
+
 
               {/* 2. Favorites Tab */}
               {activeTab === 'favorites' && (
-                <div className="space-y-3">
+                <div className="space-y-4">
                   {favorites.length === 0 ? (
-                    <div className="text-center py-10 bg-neutral-50/50 rounded-2xl border border-neutral-100 border-dashed">
-                      <span className="text-3xl block mb-2">❤️</span>
-                      <p className="text-neutral-450 text-xs font-semibold">No favorite recipes yet</p>
-                      <p className="text-neutral-400 text-[10px] mt-0.5">Click the heart icon on any recipe card to save it here.</p>
+                    <div className="text-center py-12 bg-[#F0EBE5]/30 rounded-[2rem] border border-[#DED8CF] border-dashed">
+                      <p className="text-[#4A4A40] text-sm font-semibold">No favorite recipes yet</p>
+                      <p className="text-[#78786C] text-xs mt-1">Click the heart icon on any recipe card to save it here.</p>
                     </div>
                   ) : (
                     favorites.map((fav) => {
@@ -205,18 +176,18 @@ export default function UserProfilePanel({
                             onSelectRecipe(recipe);
                             onClose();
                           }}
-                          className="flex items-center gap-3 p-3 bg-white border border-neutral-150 hover:border-neutral-300 rounded-2xl transition-all cursor-pointer hover:shadow-sm"
+                          className="flex items-center gap-4 p-4 bg-white/60 border border-[#DED8CF]/50 hover:border-[#5D7052]/50 rounded-[2rem] rounded-tl-[1rem] transition-all duration-300 cursor-pointer hover:shadow-soft group"
                         >
                           <img
                             src={recipe.image_url || 'https://images.unsplash.com/photo-1495521821757-a1efb6729352?w=600&auto=format&fit=crop&q=60'}
                             alt={recipe.title}
-                            className="w-12 h-12 rounded-xl object-cover"
+                            className="w-16 h-16 rounded-[1rem] object-cover group-hover:scale-105 transition-transform duration-500"
                           />
                           <div className="flex-1 min-w-0">
-                            <h4 className="font-bold text-neutral-850 text-sm truncate leading-snug">{recipe.title}</h4>
-                            <p className="text-[10px] text-neutral-400 font-semibold uppercase">{recipe.cuisine} • {recipe.time} mins</p>
+                            <h4 className="font-serif font-bold text-[#2C2C24] text-base truncate">{recipe.title}</h4>
+                            <p className="text-xs text-[#78786C] font-semibold uppercase mt-1 tracking-wider">{recipe.cuisine} • {recipe.time} mins</p>
                           </div>
-                          <span className="text-neutral-300 group-hover:text-amber-500 transition-colors">➔</span>
+                          <span className="text-[#DED8CF] group-hover:text-[#5D7052] transition-colors pr-2">➔</span>
                         </div>
                       );
                     })
@@ -228,10 +199,9 @@ export default function UserProfilePanel({
               {activeTab === 'history' && (
                 <div className="space-y-4">
                   {history.length === 0 ? (
-                    <div className="text-center py-10 bg-neutral-50/50 rounded-2xl border border-neutral-100 border-dashed">
-                      <span className="text-3xl block mb-2">⏱️</span>
-                      <p className="text-neutral-450 text-xs font-semibold">No cooking history yet</p>
-                      <p className="text-neutral-400 text-[10px] mt-0.5">Your completed meals will appear here as achievements!</p>
+                    <div className="text-center py-12 bg-[#F0EBE5]/30 rounded-[2rem] border border-[#DED8CF] border-dashed">
+                      <p className="text-[#4A4A40] text-sm font-semibold">No cooking history yet</p>
+                      <p className="text-[#78786C] text-xs mt-1">Your completed meals will appear here as achievements!</p>
                     </div>
                   ) : (
                     history.map((entry) => {
@@ -240,17 +210,17 @@ export default function UserProfilePanel({
                       return (
                         <div
                           key={entry.id}
-                          className="p-4 bg-white border border-neutral-150 rounded-2xl flex flex-col gap-2 relative shadow-sm"
+                          className="p-5 bg-white/60 border border-[#DED8CF]/50 rounded-[2rem] flex flex-col gap-3 relative shadow-sm"
                         >
                           <div className="flex items-center justify-between gap-3">
-                            <h4 className="font-bold text-neutral-850 text-sm line-clamp-1">{recipe.title}</h4>
-                            <span className="text-[10px] font-bold bg-neutral-50 border border-neutral-100 text-neutral-500 px-2 py-0.5 rounded-md whitespace-nowrap">
+                            <h4 className="font-serif font-bold text-[#2C2C24] text-base line-clamp-1">{recipe.title}</h4>
+                            <span className="text-[10px] font-bold bg-[#E6DCCD]/30 text-[#4A4A40] px-3 py-1 rounded-full whitespace-nowrap">
                               {formatRelativeDate(entry.completed_at)}
                             </span>
                           </div>
-                          <div className="flex items-center justify-between text-[11px] text-neutral-400 font-semibold pt-1 border-t border-neutral-50">
-                            <span>✅ Completed</span>
-                            <span className="text-amber-500">{"★".repeat(entry.rating || 5)}</span>
+                          <div className="flex items-center justify-between text-xs text-[#78786C] font-semibold pt-3 border-t border-[#DED8CF]/30">
+                            <span className="text-[#5D7052]">Completed</span>
+                            <span className="text-[#C18C5D]">{"★".repeat(entry.rating || 5)}</span>
                           </div>
                         </div>
                       );

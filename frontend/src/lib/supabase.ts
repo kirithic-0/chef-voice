@@ -185,3 +185,43 @@ export async function addCookingHistory(userId: string, recipeId: string, durati
   if (error) throw error;
   return data;
 }
+
+// Admin and Recipe Management helpers
+export async function updateAdminStatus(userId: string, isAdmin: boolean) {
+  const { data, error } = await supabase
+    .from('profiles')
+    .update({ is_admin: isAdmin })
+    .eq('id', userId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+export async function createRecipe(recipe: Omit<Recipe, 'id'>): Promise<Recipe> {
+  const headers = await getAuthHeaders();
+  const response = await fetch(`${API_BASE_URL}/recipes`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(recipe)
+  });
+  if (!response.ok) {
+    const errData = await response.json().catch(() => ({}));
+    throw new Error(errData.detail || 'Failed to create recipe');
+  }
+  return response.json();
+}
+
+export async function deleteRecipe(id: string): Promise<void> {
+  const headers = await getAuthHeaders();
+  const response = await fetch(`${API_BASE_URL}/recipes/${id}`, {
+    method: 'DELETE',
+    headers
+  });
+  if (!response.ok) {
+    const errData = await response.json().catch(() => ({}));
+    throw new Error(errData.detail || 'Failed to delete recipe');
+  }
+}
+

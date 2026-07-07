@@ -107,3 +107,45 @@ CREATE INDEX IF NOT EXISTS recipes_embedding_hnsw_idx
 ON public.recipes 
 USING hnsw (embedding vector_cosine_ops);
 
+-- Alter recipes table to add rating columns
+ALTER TABLE public.recipes ADD COLUMN IF NOT EXISTS average_rating float DEFAULT 0.0;
+ALTER TABLE public.recipes ADD COLUMN IF NOT EXISTS rating_count integer DEFAULT 0;
+
+-- Alter profiles table to add is_admin flag
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS is_admin boolean DEFAULT false;
+
+-- Create function to update recipe average rating and count
+CREATE OR REPLACE FUNCTION public.update_recipe_rating_stats()
+RETURNS TRIGGER AS $$
+DECLARE
+    r_id uuid;
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        r_id := OLD.recipe_id;
+    ELSE
+        r_id := NEW.recipe_id;
+    END IF;
+
+    UPDATE public.recipes
+    SET 
+        average_rating = COALESCE((SELECT AVG(rating)::float FROM public.cooking_history WHERE recipe_id = r_id AND rating IS NOT NULL), 0.0),
+        rating_count = COALESCE((SELECT COUNT(rating)::integer FROM public.cooking_history WHERE recipe_id = r_id AND rating IS NOT NULL), 0)
+    WHERE id = r_id;
+
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Create trigger on cooking_history
+DROP TRIGGER IF EXISTS trg_update_recipe_rating_stats ON public.cooking_history;
+CREATE TRIGGER trg_update_recipe_rating_stats
+    AFTER INSERT OR UPDATE OR DELETE ON public.cooking_history
+    FOR EACH ROW
+    EXECUTE FUNCTION public.update_recipe_rating_stats();
+
+-- Backfill existing ratings stats for all recipes
+UPDATE public.recipes r
+SET 
+    average_rating = COALESCE((SELECT AVG(rating)::float FROM public.cooking_history ch WHERE ch.recipe_id = r.id AND ch.rating IS NOT NULL), 0.0),
+    rating_count = COALESCE((SELECT COUNT(rating)::integer FROM public.cooking_history ch WHERE ch.recipe_id = r.id AND ch.rating IS NOT NULL), 0);
+

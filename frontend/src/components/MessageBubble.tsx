@@ -10,10 +10,10 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
   return (
     <div className={`flex w-full ${isUser ? 'justify-end' : 'justify-start'} my-2`}>
       <div
-        className={`max-w-[75%] rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed shadow-sm transition-all duration-200 ${
+        className={`max-w-[75%] px-5 py-3 text-[15px] leading-relaxed shadow-sm transition-all duration-300 font-sans ${
           isUser
-            ? 'bg-neutral-900 text-white rounded-tr-none'
-            : 'bg-neutral-200/50 text-neutral-850 rounded-tl-none border border-neutral-250/20'
+            ? 'bg-[#5D7052] text-[#F3F4F1] rounded-[1.5rem] rounded-tr-[0.25rem]'
+            : 'bg-[#F0EBE5] text-[#2C2C24] rounded-[1.5rem] rounded-tl-[0.25rem] border border-[#DED8CF]'
         }`}
       >
         {message.text}

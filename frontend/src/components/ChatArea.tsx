@@ -17,11 +17,11 @@ export default function ChatArea({ messages, isAiThinking, interimTranscript }: 
   }, [messages, isAiThinking, interimTranscript]);
 
   return (
-    <div className="flex-1 overflow-y-auto px-4 py-6 md:px-8 space-y-4 max-w-3xl mx-auto w-full h-full flex flex-col justify-between">
+    <div className="flex-1 overflow-y-auto px-4 py-6 md:px-8 space-y-4 max-w-3xl mx-auto w-full h-full flex flex-col justify-between relative z-10">
       {messages.length === 0 && !isAiThinking && !interimTranscript ? (
         <div className="my-auto flex flex-col items-center justify-center">
-          <p className="text-neutral-450 text-base md:text-lg text-center select-none font-light">
-            Press the mic to start a conversation or type below
+          <p className="text-[#78786C] text-base md:text-lg text-center select-none font-sans bg-[#F0EBE5]/50 px-6 py-3 rounded-full">
+            Just speak out loud to chat, or type below
           </p>
         </div>
       ) : (
@@ -31,7 +31,7 @@ export default function ChatArea({ messages, isAiThinking, interimTranscript }: 
           ))}
           {interimTranscript && (
             <div className="flex w-full justify-end my-2">
-              <div className="max-w-[75%] rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed shadow-sm bg-neutral-900/60 text-white rounded-tr-none italic animate-pulse">
+              <div className="max-w-[75%] px-5 py-3 text-[15px] leading-relaxed shadow-sm transition-all duration-300 font-sans bg-[#5D7052]/60 text-[#F3F4F1] rounded-[1.5rem] rounded-tr-[0.25rem] italic animate-pulse">
                 {interimTranscript}
               </div>
             </div>
