@@ -3,9 +3,10 @@ import React, { useEffect, useRef } from 'react';
 interface WaveformProps {
   status: 'idle' | 'connecting' | 'recording' | 'isAiThinking' | 'isAiSpeaking';
   analyser: AnalyserNode | null;
+  muted?: boolean;
 }
 
-export default function Waveform({ status, analyser }: WaveformProps) {
+export default function Waveform({ status, analyser, muted = false }: WaveformProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const animationRef = useRef<number | null>(null);
 
@@ -45,7 +46,13 @@ export default function Waveform({ status, analyser }: WaveformProps) {
       let color = '226, 232, 240'; // neutral slate
       let speed = 0.08;
 
-      if (status === 'recording') {
+      if (muted) {
+        // Mic is muted — show a flat, dim line regardless of live audio.
+        amplitude = 2;
+        color = '160, 160, 150'; // muted gray
+        lines = 2;
+        phase += 0.02;
+      } else if (status === 'recording') {
         color = '239, 68, 68'; // red
         lines = 5;
         phase += 0.12;
@@ -118,13 +125,18 @@ export default function Waveform({ status, analyser }: WaveformProps) {
         cancelAnimationFrame(animationRef.current);
       }
     };
-  }, [status, analyser]);
+  }, [status, analyser, muted]);
 
   return (
     <div className="w-full h-24 bg-neutral-950/20 rounded-2xl border border-neutral-800/10 overflow-hidden relative backdrop-blur-md">
       <canvas ref={canvasRef} className="w-full h-full block" />
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none select-none">
-        {status === 'recording' && (
+        {muted && status === 'recording' && (
+          <span className="text-[11px] font-semibold tracking-wider text-amber-400 uppercase">
+            🔇 Mic Muted
+          </span>
+        )}
+        {!muted && status === 'recording' && (
           <span className="text-[11px] font-semibold tracking-wider text-red-500 uppercase animate-pulse">
             Listening Continuous
           </span>

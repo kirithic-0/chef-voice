@@ -1,10 +1,16 @@
 """
-NVIDIA NIM tool-calling agent loop for ChefVoice.
+Groq tool-calling agent loop for ChefVoice.
+
+Groq exposes an OpenAI-compatible Chat Completions API, so the same request /
+response shape (tools, tool_calls, streaming SSE) works unchanged. The endpoint
+is configurable via ToolContext.llm_base_url, so any OpenAI-compatible provider
+(Groq by default, or NVIDIA NIM, etc.) can be swapped in without code changes.
 """
 from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from typing import Any, Awaitable, Callable, Optional
 
@@ -12,11 +18,15 @@ import httpx
 
 from tools import TOOL_DEFINITIONS, ToolContext, build_system_prompt, execute_tool
 
-NVIDIA_CHAT_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
-# Tool-calling models on NVIDIA NIM. Override the primary via the NVIDIA_MODEL
-# env var; the fallback is a smaller/faster model used on timeout or 5xx.
-DEFAULT_MODEL = "meta/llama-3.1-70b-instruct"
-FALLBACK_MODEL = "meta/llama-3.1-8b-instruct"
+# Groq's OpenAI-compatible Chat Completions endpoint. Override per-request via
+# ToolContext.llm_base_url (set from the LLM_BASE_URL env var in main.py).
+GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
+
+# Tool-calling models on Groq. Override the primary via the GROQ_MODEL env var;
+# the fallback is a smaller/faster model used on timeout or 5xx. Both support
+# OpenAI-style function calling and are chosen for Groq's low latency.
+DEFAULT_MODEL = "llama-3.3-70b-versatile"
+FALLBACK_MODEL = "llama-3.1-8b-instant"
 MAX_TOOL_ROUNDS = 4
 TOOL_CALL_TIMEOUT = 25.0
 STREAM_TIMEOUT = 45.0
@@ -33,12 +43,13 @@ def _log(*args) -> None:
 SendJson = Callable[[dict], Awaitable[None]]
 
 
-async def _nvidia_chat(
+async def _llm_chat(
     http_client: Any,
     api_key: str,
     model: str,
     messages: list[dict],
     *,
+    chat_url: str = GROQ_CHAT_URL,
     tools: Optional[list] = None,
     tool_choice: Optional[str] = None,
     stream: bool = False,
@@ -64,31 +75,33 @@ async def _nvidia_chat(
         body["tool_choice"] = tool_choice
 
     if stream:
-        return http_client.stream("POST", NVIDIA_CHAT_URL, headers=headers, json=body, timeout=timeout)
+        return http_client.stream("POST", chat_url, headers=headers, json=body, timeout=timeout)
 
-    resp = await http_client.post(NVIDIA_CHAT_URL, headers=headers, json=body, timeout=timeout)
+    resp = await http_client.post(chat_url, headers=headers, json=body, timeout=timeout)
     return resp
 
 
-async def _nvidia_chat_with_fallback(
+async def _llm_chat_with_fallback(
     http_client: Any,
     api_key: str,
     model: str,
     messages: list[dict],
     *,
+    chat_url: str = GROQ_CHAT_URL,
     tools: Optional[list] = None,
     tool_choice: Optional[str] = None,
     temperature: float = 0.4,
     max_tokens: int = 512,
 ) -> tuple[Any, str]:
-    """Call NIM; on timeout/5xx, retry once with FALLBACK_MODEL if different."""
+    """Call the LLM; on timeout/5xx, retry once with FALLBACK_MODEL if different."""
     active = model
     try:
-        resp = await _nvidia_chat(
+        resp = await _llm_chat(
             http_client,
             api_key,
             active,
             messages,
+            chat_url=chat_url,
             tools=tools,
             tool_choice=tool_choice,
             temperature=temperature,
@@ -100,11 +113,12 @@ async def _nvidia_chat_with_fallback(
             raise
         _log(f"[agent] timeout on {active}, falling back to {FALLBACK_MODEL}")
         active = FALLBACK_MODEL
-        resp = await _nvidia_chat(
+        resp = await _llm_chat(
             http_client,
             api_key,
             active,
             messages,
+            chat_url=chat_url,
             tools=tools,
             tool_choice=tool_choice,
             temperature=temperature,
@@ -115,11 +129,12 @@ async def _nvidia_chat_with_fallback(
     if resp.status_code >= 500 and active != FALLBACK_MODEL:
         _log(f"[agent] {active} returned {resp.status_code}, falling back to {FALLBACK_MODEL}")
         active = FALLBACK_MODEL
-        resp = await _nvidia_chat(
+        resp = await _llm_chat(
             http_client,
             api_key,
             active,
             messages,
+            chat_url=chat_url,
             tools=tools,
             tool_choice=tool_choice,
             temperature=temperature,
@@ -141,18 +156,66 @@ def _parse_tool_args(raw: Any) -> dict:
         return {}
 
 
+# Some models occasionally emit tool calls as TEXT inside the message content
+# (e.g. `<navigate_step>{"direction": "next"}</navigate_step>` or
+# `<function=navigate_step>{...}</function>`) instead of a structured tool_call.
+# When that happens the tool never actually runs — so the UI never updates — and
+# the raw markup leaks into the spoken reply. We detect these, run them for real,
+# and strip them out of the text the user sees/hears.
+_TOOL_NAMES = {t["function"]["name"] for t in TOOL_DEFINITIONS}
+
+_INLINE_TOOL_PATTERNS = [
+    # <navigate_step>{...}</navigate_step>
+    re.compile(r"<\s*(?P<name>[a-zA-Z_][a-zA-Z0-9_]*)\s*>\s*(?P<args>\{.*?\})?\s*<\s*/\s*(?P=name)\s*>", re.DOTALL),
+    # <function=navigate_step>{...}</function>
+    re.compile(r"<\s*function\s*=\s*(?P<name>[a-zA-Z_][a-zA-Z0-9_]*)\s*>\s*(?P<args>\{.*?\})?\s*<\s*/\s*function\s*>", re.DOTALL),
+]
+
+# Stray formatting tokens some models sprinkle into content.
+_STRAY_MARKUP_RE = re.compile(
+    r"<\s*/?\s*function[^>]*>|<\|python_tag\|>|<\|eom_id\|>|<\|eot_id\|>",
+    re.IGNORECASE,
+)
+
+
+def _extract_inline_tool_calls(text: str) -> tuple[list[tuple[str, dict]], str]:
+    """Pull tool-call markup the model wrote as text. Returns (calls, cleaned_text)."""
+    calls: list[tuple[str, dict]] = []
+    cleaned = text or ""
+    for pattern in _INLINE_TOOL_PATTERNS:
+        def _repl(m: "re.Match") -> str:
+            name = m.group("name")
+            if name not in _TOOL_NAMES:
+                return m.group(0)  # not a real tool — leave the text untouched
+            calls.append((name, _parse_tool_args(m.group("args") or "{}")))
+            return ""
+        cleaned = pattern.sub(_repl, cleaned)
+    return calls, cleaned
+
+
+def _sanitize_spoken_text(text: str) -> str:
+    """Strip any tool-call markup / stray tokens so the reply is clean speech."""
+    if not text:
+        return ""
+    _, cleaned = _extract_inline_tool_calls(text)
+    cleaned = _STRAY_MARKUP_RE.sub(" ", cleaned)
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
 async def stream_final_text(
     http_client: Any,
     api_key: str,
     model: str,
     messages: list[dict],
     send_json: SendJson,
+    *,
+    chat_url: str = GROQ_CHAT_URL,
 ) -> str:
     """Stream final assistant tokens to the client as ai_text_partial, return full text."""
     full = []
     async with http_client.stream(
         "POST",
-        NVIDIA_CHAT_URL,
+        chat_url,
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
@@ -169,7 +232,7 @@ async def stream_final_text(
     ) as resp:
         if resp.status_code >= 400:
             err_body = await resp.aread()
-            raise RuntimeError(f"NVIDIA stream error {resp.status_code}: {err_body[:500]}")
+            raise RuntimeError(f"LLM stream error {resp.status_code}: {err_body[:500]}")
 
         async for line in resp.aiter_lines():
             if not line:
@@ -207,6 +270,7 @@ async def run_agent_turn(
     """
     t0 = time.time()
     ctx.ui_actions.clear()
+    chat_url = ctx.llm_base_url or GROQ_CHAT_URL
 
     system = build_system_prompt(ctx.cooking_state)
     messages: list[dict] = [
@@ -220,30 +284,32 @@ async def run_agent_turn(
 
     for round_idx in range(MAX_TOOL_ROUNDS):
         _log(f"[agent] round={round_idx} model={active_model}")
-        resp, active_model = await _nvidia_chat_with_fallback(
+        resp, active_model = await _llm_chat_with_fallback(
             ctx.http_client,
-            ctx.nvidia_api_key,
+            ctx.llm_api_key,
             active_model,
             messages,
+            chat_url=chat_url,
             tools=TOOL_DEFINITIONS,
             tool_choice="auto",
         )
 
         if resp.status_code == 400 and active_model != FALLBACK_MODEL:
-            # Some cloud models reject tools; fall back once
+            # Some models reject tools; fall back once
             _log(f"[agent] model {active_model} rejected tools ({resp.text[:300]}), trying fallback")
             active_model = FALLBACK_MODEL
-            resp, active_model = await _nvidia_chat_with_fallback(
+            resp, active_model = await _llm_chat_with_fallback(
                 ctx.http_client,
-                ctx.nvidia_api_key,
+                ctx.llm_api_key,
                 active_model,
                 messages,
+                chat_url=chat_url,
                 tools=TOOL_DEFINITIONS,
                 tool_choice="auto",
             )
 
         if resp.status_code >= 400:
-            raise RuntimeError(f"NVIDIA error {resp.status_code}: {resp.text[:800]}")
+            raise RuntimeError(f"LLM error {resp.status_code}: {resp.text[:800]}")
 
         data = resp.json()
         message = (data.get("choices") or [{}])[0].get("message") or {}
@@ -274,8 +340,40 @@ async def run_agent_turn(
                 })
             continue
 
+        # No structured tool calls. Some models instead emit tool calls as text;
+        # recover and execute those for real so the UI updates, then continue so
+        # the model produces a clean spoken reply from the tool results.
+        content = message.get("content") or ""
+        inline_calls, cleaned = _extract_inline_tool_calls(content)
+        if inline_calls:
+            _log(f"[agent] recovered {len(inline_calls)} inline tool call(s) from text")
+            synthetic = [
+                {
+                    "id": f"inline_{i}",
+                    "type": "function",
+                    "function": {"name": name, "arguments": json.dumps(args)},
+                }
+                for i, (name, args) in enumerate(inline_calls)
+            ]
+            messages.append({
+                "role": "assistant",
+                "content": cleaned.strip() or None,
+                "tool_calls": synthetic,
+            })
+            for i, (name, args) in enumerate(inline_calls):
+                result = await execute_tool(name, args, ctx)
+                while ctx.ui_actions:
+                    action = ctx.ui_actions.pop(0)
+                    await send_json({"type": "ai_action", "action": action})
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": f"inline_{i}",
+                    "content": json.dumps(result),
+                })
+            continue
+
         # No tool calls — take content as final (may stream a polished reply)
-        final_text = (message.get("content") or "").strip()
+        final_text = _sanitize_spoken_text(content)
         break
     # Prefer streaming final text for snappier UI when tools exhausted without content
     if not final_text:
@@ -287,24 +385,29 @@ async def run_agent_turn(
         try:
             final_text = await stream_final_text(
                 ctx.http_client,
-                ctx.nvidia_api_key,
+                ctx.llm_api_key,
                 active_model,
                 wrap_messages,
                 send_json,
+                chat_url=chat_url,
             )
         except Exception as e:
             _log(f"[agent] stream failed, falling back to non-stream: {type(e).__name__}: {e!r}")
-            resp = await _nvidia_chat(
+            resp = await _llm_chat(
                 ctx.http_client,
-                ctx.nvidia_api_key,
+                ctx.llm_api_key,
                 active_model,
                 wrap_messages,
+                chat_url=chat_url,
                 max_tokens=512,
                 timeout=TOOL_CALL_TIMEOUT,
             )
             resp.raise_for_status()
             final_text = ((resp.json().get("choices") or [{}])[0].get("message") or {}).get("content") or ""
             final_text = final_text.strip()
+
+    # Final safety net: never let tool markup reach the user's ears/screen.
+    final_text = _sanitize_spoken_text(final_text)
 
     # Flush any remaining UI actions
     while ctx.ui_actions:

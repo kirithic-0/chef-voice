@@ -18,6 +18,7 @@ import {
   logout
 } from './lib/api';
 import RecipeCard from './components/RecipeCard';
+import AssistantPanel from './components/AssistantPanel';
 import Waveform from './components/Waveform';
 import TimerWidget from './components/TimerWidget';
 import Auth from './components/Auth';
@@ -65,6 +66,9 @@ export default function App() {
 
   // Text chat input
   const [textInput, setTextInput] = useState('');
+  // Home-screen chat assistant (recipe discovery entry point)
+  const [showAssistant, setShowAssistant] = useState(false);
+  const [assistantSuggestions, setAssistantSuggestions] = useState<Recipe[]>([]);
 
   // Admin form state
   const [adminTitle, setAdminTitle] = useState('');
@@ -424,11 +428,12 @@ export default function App() {
         }
         break;
       case 'cancel_timer':
-        if (params?.label) {
+        // Prefer the exact timer id the backend resolved; fall back to label.
+        if (params?.id) {
+          timers.removeTimer(params.id);
+        } else if (params?.label) {
           const match = timers.timers.find(t => t.label.toLowerCase().includes(params.label!.toLowerCase()));
           if (match) timers.removeTimer(match.id);
-        } else if (params?.id) {
-          timers.removeTimer(params.id);
         }
         break;
       case 'search_recipes':
@@ -436,10 +441,12 @@ export default function App() {
           setSearchQuery(params.query);
           setUseSemanticSearch(true);
           setSelectedCuisine('All');
-          setView('home');
           if (params.results && Array.isArray(params.results) && params.results.length > 0) {
             setSearchResults(params.results as Recipe[]);
+            // Surface clickable suggestions inside the assistant panel.
+            setAssistantSuggestions(params.results as Recipe[]);
           }
+          if (!showAssistant) setView('home');
         }
         break;
       case 'select_recipe':
@@ -454,21 +461,6 @@ export default function App() {
         break;
       case 'start_cooking':
         if (view !== 'cooking') handleStartCooking();
-        break;
-      case 'scale_recipe':
-        if (selectedRecipe && params?.ingredients && params?.servings) {
-          setSelectedRecipe({
-            ...selectedRecipe,
-            servings: params.servings,
-            ingredients: params.ingredients,
-          });
-        }
-        break;
-      case 'shopping_list_updated':
-        setShoppingRefreshKey((k) => k + 1);
-        setShowShoppingList(true);
-        break;
-      case 'memory_saved':
         break;
       case 'recipe_imported':
         loadAllRecipes();
@@ -485,6 +477,37 @@ export default function App() {
 
     voice.setLatestAction(null);
   }, [voice.latestAction, view, selectedRecipe, currentStep, recipes, timers.timers]);
+
+  // Home chat assistant: open starts a voice/text session in discovery context.
+  const openAssistant = () => {
+    setShowAssistant(true);
+    if (voice.status === 'idle') {
+      voice.start({
+        screen: 'home',
+        recipe: null,
+        current_step: 0,
+        timers: timers.timers,
+        dietary_preferences: userProfile?.dietary_preferences || [],
+      }).catch((err) => console.error('Failed to start assistant:', err));
+    }
+  };
+
+  const closeAssistant = () => {
+    setShowAssistant(false);
+    setAssistantSuggestions([]);
+    voice.stop();
+  };
+
+  // Explicit user pick (grid card or an assistant suggestion): end discovery,
+  // then flow into the normal detail -> cooking screens.
+  const handlePickRecipe = (recipe: Recipe) => {
+    if (showAssistant) {
+      setShowAssistant(false);
+      setAssistantSuggestions([]);
+      voice.stop();
+    }
+    handleSelectRecipe(recipe);
+  };
 
   // Navigation handlers
   const handleSelectRecipe = (recipe: Recipe) => {
@@ -797,7 +820,7 @@ export default function App() {
                         <RecipeCard 
                           key={recipe.id} 
                           recipe={recipe} 
-                          onClick={() => handleSelectRecipe(recipe)}
+                          onClick={() => handlePickRecipe(recipe)}
                           isFavorite={favorites.some(f => f.recipe_id === recipe.id)}
                           onFavoriteToggle={(e) => handleFavoriteToggle(e, recipe.id)}
                           cookedDate={cookedDateStr}
@@ -838,7 +861,7 @@ export default function App() {
                       return (
                         <div
                           key={entry.id}
-                          onClick={() => handleSelectRecipe(recipe)}
+                          onClick={() => handlePickRecipe(recipe)}
                           className="group flex items-center gap-4 p-3 hover:bg-[#FEFEFA] rounded-[1.5rem] transition-all duration-300 cursor-pointer border border-transparent hover:border-[#5D7052]/30 hover:shadow-soft"
                         >
                           <div className="w-14 h-14 rounded-xl overflow-hidden bg-[#F0EBE5] shrink-0">
@@ -1405,7 +1428,41 @@ export default function App() {
 
                   {/* Waveform visualizer */}
                   <div className="space-y-6">
-                    <Waveform status={voice.status} analyser={voice.analyser} />
+                    <Waveform status={voice.status} analyser={voice.analyser} muted={voice.isMuted} />
+
+                    {/* Mute / unmute the microphone */}
+                    <div className="flex justify-center">
+                      <button
+                        onClick={voice.toggleMute}
+                        disabled={voice.status === 'idle' || voice.status === 'connecting'}
+                        aria-pressed={voice.isMuted}
+                        aria-label={voice.isMuted ? 'Unmute microphone' : 'Mute microphone'}
+                        className={`px-6 py-3 rounded-full text-xs font-bold uppercase tracking-wider flex items-center gap-2 transition-all duration-300 active:scale-95 shadow-float cursor-pointer select-none disabled:opacity-40 disabled:cursor-not-allowed ${
+                          voice.isMuted
+                            ? 'bg-amber-500/90 hover:bg-amber-500 text-[#1A1A14]'
+                            : 'bg-[#2C2C24] hover:bg-[#3A3A30] text-[#F3F4F1] border border-[#4A4A40]'
+                        }`}
+                      >
+                        {voice.isMuted ? (
+                          <>
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">
+                              <path d="M13.5 4.06c0-1.336-1.616-2.005-2.56-1.06l-2.72 2.72H6.75A2.75 2.75 0 0 0 4 8.47v7.06a2.75 2.75 0 0 0 2.75 2.75h1.47l2.72 2.72c.944.945 2.56.276 2.56-1.06V4.06Z" />
+                              <path d="m17.28 9.22 1.72 1.72 1.72-1.72a.75.75 0 1 1 1.06 1.06L20.06 12l1.72 1.72a.75.75 0 1 1-1.06 1.06L19 13.06l-1.72 1.72a.75.75 0 1 1-1.06-1.06L17.94 12l-1.72-1.72a.75.75 0 1 1 1.06-1.06Z" />
+                            </svg>
+                            Unmute Mic
+                          </>
+                        ) : (
+                          <>
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">
+                              <path d="M8.25 4.5a3.75 3.75 0 1 1 7.5 0v8.25a3.75 3.75 0 1 1-7.5 0V4.5Z" />
+                              <path d="M6 10.5a.75.75 0 0 1 .75.75v1.5a5.25 5.25 0 1 0 10.5 0v-1.5a.75.75 0 0 1 1.5 0v1.5a6.751 6.751 0 0 1-6 6.709v2.291h3a.75.75 0 0 1 0 1.5h-7.5a.75.75 0 0 1 0-1.5h3v-2.291a6.751 6.751 0 0 1-6-6.709v-1.5A.75.75 0 0 1 6 10.5Z" />
+                            </svg>
+                            Mute Mic
+                          </>
+                        )}
+                      </button>
+                    </div>
+
                     <div className="text-center text-[10px] text-[#A0A096] font-bold uppercase tracking-wider flex flex-wrap items-center justify-center gap-4 select-none">
                       <span className="bg-[#2C2C24] px-3 py-1.5 rounded-full border border-[#4A4A40]">Speak: "next"</span>
                       <span className="bg-[#2C2C24] px-3 py-1.5 rounded-full border border-[#4A4A40]">"go back"</span>
@@ -1466,6 +1523,31 @@ export default function App() {
           )
         )}
       </main>
+
+      {/* Floating launcher for the home chat assistant */}
+      {(view === 'home' || view === 'detail') && !showAssistant && (
+        <button
+          onClick={openAssistant}
+          aria-label="Open ChefVoice assistant"
+          className="fixed bottom-6 right-6 z-40 flex items-center gap-2.5 bg-[#5D7052] hover:bg-[#4A5D40] text-[#F3F4F1] pl-4 pr-5 py-3.5 rounded-full shadow-[0_10px_30px_-5px_rgba(93,112,82,0.5)] transition-all active:scale-95 cursor-pointer"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
+            <path d="M8.25 4.5a3.75 3.75 0 1 1 7.5 0v8.25a3.75 3.75 0 1 1-7.5 0V4.5Z" />
+            <path d="M6 10.5a.75.75 0 0 1 .75.75v1.5a5.25 5.25 0 1 0 10.5 0v-1.5a.75.75 0 0 1 1.5 0v1.5a6.751 6.751 0 0 1-6 6.709v2.291h3a.75.75 0 0 1 0 1.5h-7.5a.75.75 0 0 1 0-1.5h3v-2.291a6.751 6.751 0 0 1-6-6.709v-1.5A.75.75 0 0 1 6 10.5Z" />
+          </svg>
+          <span className="text-sm font-bold">Ask ChefVoice</span>
+        </button>
+      )}
+
+      {/* Home chat assistant panel (recipe discovery) */}
+      {showAssistant && (
+        <AssistantPanel
+          voice={voice}
+          suggestions={assistantSuggestions}
+          onPick={handlePickRecipe}
+          onClose={closeAssistant}
+        />
+      )}
 
       {/* Auth Modal */}
       {showAuthModal && (

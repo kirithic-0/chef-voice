@@ -142,5 +142,225 @@
       {"step": 3, "text": "Scoop dough balls onto a baking sheet. Bake for 10-12 minutes until edges are golden.", "timer_duration": 720, "safety_alert": null},
       {"step": 4, "text": "Remove from oven and let sit on the hot pan for 5 minutes, then transfer to a wire rack to cool.", "timer_duration": 300, "safety_alert": "Cookies will be soft right out of the oven, handle with care."}
     ]
+  },
+  {
+    "title": "Chana Masala",
+    "cuisine": "Indian",
+    "time": 35,
+    "difficulty": "Medium",
+    "servings": 4,
+    "dietary": ["Veg", "Vegan", "Gluten-free"],
+    "image_url": "https://images.unsplash.com/photo-1546833999-b9f581a1996d?w=600&auto=format&fit=crop&q=60",
+    "ingredients": [
+      {"name": "Chickpeas", "amount": "2", "unit": "cans, drained"},
+      {"name": "Onion", "amount": "1", "unit": "large, finely chopped"},
+      {"name": "Tomatoes", "amount": "3", "unit": "pureed"},
+      {"name": "Garlic paste", "amount": "1", "unit": "tbsp"},
+      {"name": "Ginger paste", "amount": "1", "unit": "tbsp"},
+      {"name": "Garam masala", "amount": "2", "unit": "tsp"},
+      {"name": "Ground cumin", "amount": "1", "unit": "tsp"},
+      {"name": "Vegetable oil", "amount": "2", "unit": "tbsp"},
+      {"name": "Fresh coriander", "amount": "to serve", "unit": ""}
+    ],
+    "steps": [
+      {"step": 1, "text": "Heat the oil in a large pan over medium heat and fry the chopped onion until deep golden, about 6 minutes.", "timer_duration": 360, "safety_alert": "Hot oil can splatter; add the onion gently."},
+      {"step": 2, "text": "Stir in the garlic and ginger paste and cook for 1 minute until fragrant.", "timer_duration": 60, "safety_alert": null},
+      {"step": 3, "text": "Add the pureed tomatoes, garam masala, and cumin. Simmer for 8 minutes until the sauce thickens and darkens.", "timer_duration": 480, "safety_alert": null},
+      {"step": 4, "text": "Tip in the drained chickpeas with a splash of water. Simmer for 10 minutes, stirring occasionally.", "timer_duration": 600, "safety_alert": null},
+      {"step": 5, "text": "Lightly mash a few chickpeas to thicken, season with salt, and garnish with fresh coriander before serving.", "timer_duration": null, "safety_alert": null}
+    ]
+  },
+  {
+    "title": "Spaghetti Aglio e Olio",
+    "cuisine": "Italian",
+    "time": 20,
+    "difficulty": "Easy",
+    "servings": 2,
+    "dietary": ["Veg", "Vegan"],
+    "image_url": "https://images.unsplash.com/photo-1621996346565-e3dbc646d9a9?w=600&auto=format&fit=crop&q=60",
+    "ingredients": [
+      {"name": "Spaghetti", "amount": "200", "unit": "g"},
+      {"name": "Garlic", "amount": "5", "unit": "cloves, thinly sliced"},
+      {"name": "Olive oil", "amount": "1/3", "unit": "cup"},
+      {"name": "Red pepper flakes", "amount": "1/2", "unit": "tsp"},
+      {"name": "Fresh parsley", "amount": "1/4", "unit": "cup, chopped"},
+      {"name": "Salt", "amount": "to taste", "unit": ""}
+    ],
+    "steps": [
+      {"step": 1, "text": "Bring a large pot of well-salted water to a boil and cook the spaghetti for 9 minutes until al dente. Reserve half a cup of pasta water before draining.", "timer_duration": 540, "safety_alert": "Be careful lifting the pot of boiling water."},
+      {"step": 2, "text": "While the pasta cooks, warm the olive oil in a wide pan over low heat and add the sliced garlic.", "timer_duration": null, "safety_alert": null},
+      {"step": 3, "text": "Gently fry the garlic until pale gold, about 3 minutes, then stir in the red pepper flakes.", "timer_duration": 180, "safety_alert": "Do not let the garlic brown or it will turn bitter."},
+      {"step": 4, "text": "Add the drained spaghetti and a splash of the reserved pasta water. Toss for 1 minute so the sauce coats every strand.", "timer_duration": 60, "safety_alert": null},
+      {"step": 5, "text": "Remove from heat, fold through the parsley, season with salt, and serve immediately.", "timer_duration": null, "safety_alert": null}
+    ]
+  },
+  {
+    "title": "Margherita Flatbread Pizza",
+    "cuisine": "Italian",
+    "time": 25,
+    "difficulty": "Easy",
+    "servings": 2,
+    "dietary": ["Veg"],
+    "image_url": "https://images.unsplash.com/photo-1513104890138-7c749659a591?w=600&auto=format&fit=crop&q=60",
+    "ingredients": [
+      {"name": "Flatbread base", "amount": "2", "unit": ""},
+      {"name": "Passata", "amount": "1/2", "unit": "cup"},
+      {"name": "Fresh mozzarella", "amount": "125", "unit": "g, torn"},
+      {"name": "Fresh basil", "amount": "10", "unit": "leaves"},
+      {"name": "Olive oil", "amount": "1", "unit": "tbsp"},
+      {"name": "Salt", "amount": "to taste", "unit": ""}
+    ],
+    "steps": [
+      {"step": 1, "text": "Preheat the oven to 220C (425F) and place a baking tray inside to heat.", "timer_duration": null, "safety_alert": "The tray will be very hot; use oven mitts throughout."},
+      {"step": 2, "text": "Spread the passata over each flatbread, leaving a thin border, and season lightly with salt.", "timer_duration": null, "safety_alert": null},
+      {"step": 3, "text": "Scatter the torn mozzarella evenly over the top and drizzle with olive oil.", "timer_duration": null, "safety_alert": null},
+      {"step": 4, "text": "Slide the flatbreads onto the hot tray and bake for 9 minutes until the cheese is bubbling and the edges are crisp.", "timer_duration": 540, "safety_alert": null},
+      {"step": 5, "text": "Top with fresh basil leaves, slice, and serve hot.", "timer_duration": null, "safety_alert": null}
+    ]
+  },
+  {
+    "title": "Veggie Fried Rice",
+    "cuisine": "Quick Meals",
+    "time": 20,
+    "difficulty": "Easy",
+    "servings": 3,
+    "dietary": ["Veg", "Vegan"],
+    "image_url": "https://images.unsplash.com/photo-1603133872878-684f208fb84b?w=600&auto=format&fit=crop&q=60",
+    "ingredients": [
+      {"name": "Cooked cold rice", "amount": "3", "unit": "cups"},
+      {"name": "Mixed vegetables", "amount": "1.5", "unit": "cups, diced"},
+      {"name": "Garlic", "amount": "2", "unit": "cloves, minced"},
+      {"name": "Soy sauce", "amount": "3", "unit": "tbsp"},
+      {"name": "Sesame oil", "amount": "1", "unit": "tbsp"},
+      {"name": "Spring onions", "amount": "3", "unit": "sliced"},
+      {"name": "Vegetable oil", "amount": "2", "unit": "tbsp"}
+    ],
+    "steps": [
+      {"step": 1, "text": "Heat the vegetable oil in a wok or large pan over high heat until shimmering.", "timer_duration": null, "safety_alert": "A very hot wok can flare; keep a lid nearby."},
+      {"step": 2, "text": "Add the garlic and diced vegetables and stir-fry for 4 minutes until just tender.", "timer_duration": 240, "safety_alert": null},
+      {"step": 3, "text": "Add the cold cooked rice, breaking up any clumps, and toss for 3 minutes so it heats through and crisps slightly.", "timer_duration": 180, "safety_alert": null},
+      {"step": 4, "text": "Pour in the soy sauce and sesame oil and stir-fry for another 1 minute.", "timer_duration": 60, "safety_alert": null},
+      {"step": 5, "text": "Fold through the spring onions and serve immediately.", "timer_duration": null, "safety_alert": null}
+    ]
+  },
+  {
+    "title": "Classic Grilled Cheese",
+    "cuisine": "Quick Meals",
+    "time": 10,
+    "difficulty": "Easy",
+    "servings": 1,
+    "dietary": ["Veg"],
+    "image_url": "https://images.unsplash.com/photo-1528736235302-52922df5c122?w=600&auto=format&fit=crop&q=60",
+    "ingredients": [
+      {"name": "Bread", "amount": "2", "unit": "slices"},
+      {"name": "Cheddar cheese", "amount": "2", "unit": "slices"},
+      {"name": "Butter", "amount": "1", "unit": "tbsp, softened"}
+    ],
+    "steps": [
+      {"step": 1, "text": "Butter one side of each slice of bread right to the edges.", "timer_duration": null, "safety_alert": null},
+      {"step": 2, "text": "Place one slice butter-side down in a cold non-stick pan and layer on the cheese, then top with the second slice, butter-side up.", "timer_duration": null, "safety_alert": null},
+      {"step": 3, "text": "Set the pan over medium-low heat and cook for 3 minutes until the underside is golden.", "timer_duration": 180, "safety_alert": "The pan and melted cheese get very hot; use a spatula, not fingers."},
+      {"step": 4, "text": "Flip carefully and cook the other side for 3 minutes until golden and the cheese is fully melted.", "timer_duration": 180, "safety_alert": null},
+      {"step": 5, "text": "Rest for 1 minute, then cut in half and serve.", "timer_duration": 60, "safety_alert": null}
+    ]
+  },
+  {
+    "title": "Greek Salad",
+    "cuisine": "Healthy",
+    "time": 15,
+    "difficulty": "Easy",
+    "servings": 4,
+    "dietary": ["Veg", "Gluten-free"],
+    "image_url": "https://images.unsplash.com/photo-1540420773420-3366772f4999?w=600&auto=format&fit=crop&q=60",
+    "ingredients": [
+      {"name": "Cucumber", "amount": "1", "unit": "large, chunked"},
+      {"name": "Tomatoes", "amount": "4", "unit": "wedged"},
+      {"name": "Red onion", "amount": "1/2", "unit": "thinly sliced"},
+      {"name": "Kalamata olives", "amount": "1/2", "unit": "cup"},
+      {"name": "Feta cheese", "amount": "150", "unit": "g, cubed"},
+      {"name": "Olive oil", "amount": "3", "unit": "tbsp"},
+      {"name": "Red wine vinegar", "amount": "1", "unit": "tbsp"},
+      {"name": "Dried oregano", "amount": "1", "unit": "tsp"}
+    ],
+    "steps": [
+      {"step": 1, "text": "Add the cucumber chunks, tomato wedges, and sliced red onion to a large bowl.", "timer_duration": null, "safety_alert": "Take care slicing the onion with a sharp knife."},
+      {"step": 2, "text": "Scatter over the olives and cubed feta.", "timer_duration": null, "safety_alert": null},
+      {"step": 3, "text": "Whisk the olive oil, red wine vinegar, and oregano with a pinch of salt to make the dressing.", "timer_duration": null, "safety_alert": null},
+      {"step": 4, "text": "Pour the dressing over the salad and toss gently to combine without breaking up the feta.", "timer_duration": null, "safety_alert": null},
+      {"step": 5, "text": "Let the salad sit for 5 minutes so the flavours meld, then serve.", "timer_duration": 300, "safety_alert": null}
+    ]
+  },
+  {
+    "title": "Grilled Chicken Power Bowl",
+    "cuisine": "Healthy",
+    "time": 30,
+    "difficulty": "Medium",
+    "servings": 2,
+    "dietary": ["Gluten-free"],
+    "image_url": "https://images.unsplash.com/photo-1512621776951-a57141f2eefd?w=600&auto=format&fit=crop&q=60",
+    "ingredients": [
+      {"name": "Chicken breast", "amount": "2", "unit": ""},
+      {"name": "Cooked brown rice", "amount": "1.5", "unit": "cups"},
+      {"name": "Baby spinach", "amount": "2", "unit": "cups"},
+      {"name": "Avocado", "amount": "1", "unit": "sliced"},
+      {"name": "Cherry tomatoes", "amount": "1", "unit": "cup, halved"},
+      {"name": "Olive oil", "amount": "2", "unit": "tbsp"},
+      {"name": "Paprika", "amount": "1", "unit": "tsp"},
+      {"name": "Lemon", "amount": "1", "unit": "juiced"}
+    ],
+    "steps": [
+      {"step": 1, "text": "Rub the chicken breasts with olive oil, paprika, salt, and pepper.", "timer_duration": null, "safety_alert": "Wash your hands and the board thoroughly after handling raw chicken."},
+      {"step": 2, "text": "Heat a grill pan over medium-high heat and cook the chicken for 6 minutes per side until the juices run clear.", "timer_duration": 720, "safety_alert": "Ensure the chicken reaches 74C (165F) internally before serving."},
+      {"step": 3, "text": "Let the chicken rest for 5 minutes, then slice.", "timer_duration": 300, "safety_alert": null},
+      {"step": 4, "text": "Divide the brown rice and spinach between two bowls and arrange the tomatoes and avocado on top.", "timer_duration": null, "safety_alert": null},
+      {"step": 5, "text": "Add the sliced chicken, squeeze over the lemon juice, and drizzle with a little olive oil to serve.", "timer_duration": null, "safety_alert": null}
+    ]
+  },
+  {
+    "title": "Fudgy Chocolate Brownies",
+    "cuisine": "Desserts",
+    "time": 40,
+    "difficulty": "Medium",
+    "servings": 9,
+    "dietary": ["Veg"],
+    "image_url": "https://images.unsplash.com/photo-1606313564200-e75d5e30476c?w=600&auto=format&fit=crop&q=60",
+    "ingredients": [
+      {"name": "Dark chocolate", "amount": "200", "unit": "g"},
+      {"name": "Butter", "amount": "150", "unit": "g"},
+      {"name": "Sugar", "amount": "1", "unit": "cup"},
+      {"name": "Eggs", "amount": "3", "unit": ""},
+      {"name": "Flour", "amount": "3/4", "unit": "cup"},
+      {"name": "Cocoa powder", "amount": "2", "unit": "tbsp"}
+    ],
+    "steps": [
+      {"step": 1, "text": "Preheat the oven to 180C (350F) and line an 8-inch square tin with baking paper.", "timer_duration": null, "safety_alert": "Use oven mitts whenever the oven is on."},
+      {"step": 2, "text": "Gently melt the dark chocolate and butter together, stirring until smooth, then let cool slightly.", "timer_duration": null, "safety_alert": "Melt over low heat or in short microwave bursts so the chocolate does not scorch."},
+      {"step": 3, "text": "Whisk in the sugar, then beat in the eggs one at a time until glossy.", "timer_duration": null, "safety_alert": null},
+      {"step": 4, "text": "Fold in the flour and cocoa powder until just combined, then pour into the tin.", "timer_duration": null, "safety_alert": null},
+      {"step": 5, "text": "Bake for 25 minutes until the top is set but the centre is still fudgy. Cool completely before slicing into squares.", "timer_duration": 1500, "safety_alert": null}
+    ]
+  },
+  {
+    "title": "Mango Sticky Rice",
+    "cuisine": "Desserts",
+    "time": 45,
+    "difficulty": "Medium",
+    "servings": 4,
+    "dietary": ["Veg", "Vegan", "Gluten-free"],
+    "image_url": "https://images.unsplash.com/photo-1621293954908-907159247fc8?w=600&auto=format&fit=crop&q=60",
+    "ingredients": [
+      {"name": "Glutinous rice", "amount": "1", "unit": "cup"},
+      {"name": "Coconut milk", "amount": "1", "unit": "cup"},
+      {"name": "Sugar", "amount": "1/4", "unit": "cup"},
+      {"name": "Salt", "amount": "1/4", "unit": "tsp"},
+      {"name": "Ripe mango", "amount": "2", "unit": "sliced"}
+    ],
+    "steps": [
+      {"step": 1, "text": "Soak the glutinous rice in water for 20 minutes, then drain.", "timer_duration": 1200, "safety_alert": null},
+      {"step": 2, "text": "Steam the soaked rice over simmering water for 20 minutes until tender and translucent.", "timer_duration": 1200, "safety_alert": "Steam is hot; lift the lid away from your face."},
+      {"step": 3, "text": "Warm the coconut milk with the sugar and salt until dissolved, without boiling.", "timer_duration": null, "safety_alert": null},
+      {"step": 4, "text": "Pour most of the warm coconut mixture over the cooked rice, stir, and let it rest for 10 minutes to absorb.", "timer_duration": 600, "safety_alert": null},
+      {"step": 5, "text": "Serve the sticky rice with sliced mango and drizzle the reserved coconut sauce on top.", "timer_duration": null, "safety_alert": null}
+    ]
   }
 ]

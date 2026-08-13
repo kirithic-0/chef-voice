@@ -19,9 +19,14 @@ export default function RecipeCard({ recipe, onClick, isFavorite = false, onFavo
     >
       {/* Recipe Image & Cuisine Badge */}
       <div className="relative aspect-[16/10] bg-[#F0EBE5] overflow-hidden p-2">
-        <img 
-          src={image_url || 'https://images.unsplash.com/photo-1495521821757-a1efb6729352?w=600&auto=format&fit=crop&q=60'} 
+        <img
+          src={image_url || 'https://images.unsplash.com/photo-1495521821757-a1efb6729352?w=600&auto=format&fit=crop&q=60'}
           alt={title}
+          onError={(e) => {
+            const img = e.currentTarget;
+            const fallback = 'https://images.unsplash.com/photo-1495521821757-a1efb6729352?w=600&auto=format&fit=crop&q=60';
+            if (img.src !== fallback) img.src = fallback;
+          }}
           className="w-full h-full object-cover rounded-[1.5rem] group-hover:scale-105 transition-transform duration-700"
         />
         <div className="absolute top-5 left-5 bg-[#5D7052]/90 backdrop-blur-md text-[#F3F4F1] text-xs font-semibold px-3 py-1.5 rounded-full uppercase tracking-wider">

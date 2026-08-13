@@ -15,17 +15,21 @@ from sentence_transformers import SentenceTransformer
 
 import database as db
 import auth
-from agent import DEFAULT_MODEL, run_agent_turn
+from agent import DEFAULT_MODEL, GROQ_CHAT_URL, run_agent_turn
 from tools import ToolContext
 
 load_dotenv()
 
 # Third-party API keys for the real-time voice pipeline.
-# Deepgram = streaming speech-to-text; NVIDIA NIM = tool-calling LLM agent.
+# Deepgram = streaming speech-to-text; Groq = tool-calling LLM agent.
 # Text-to-speech is handled client-side with the browser Web Speech API.
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
-NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY")
-NVIDIA_MODEL = os.getenv("NVIDIA_MODEL", DEFAULT_MODEL)
+
+# LLM provider (Groq by default). Groq is OpenAI-compatible, so LLM_BASE_URL can
+# point at any compatible endpoint (e.g. NVIDIA NIM) without code changes.
+GROQ_API_KEY = os.getenv("GROQ_API_KEY") or os.getenv("LLM_API_KEY")
+LLM_MODEL = os.getenv("GROQ_MODEL") or os.getenv("LLM_MODEL") or DEFAULT_MODEL
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", GROQ_CHAT_URL)
 
 # Comma-separated list of allowed frontend origins (defaults to the Vite dev server).
 FRONTEND_ORIGINS = [
@@ -352,8 +356,8 @@ def post_memory(memory: MemoryCreate, user: dict = Depends(get_current_user)):
 
 @app.post("/recipes/import")
 async def import_recipe(req: ImportRequest, user: dict = Depends(get_current_user)):
-    if not NVIDIA_API_KEY:
-        raise HTTPException(status_code=500, detail="NVIDIA_API_KEY is not configured.")
+    if not GROQ_API_KEY:
+        raise HTTPException(status_code=500, detail="GROQ_API_KEY is not configured.")
     url = req.url.strip()
     if not url:
         raise HTTPException(status_code=400, detail="url is required")
@@ -366,8 +370,9 @@ async def import_recipe(req: ImportRequest, user: dict = Depends(get_current_use
             user_id=user["id"],
             http_client=client,
             embedding_model=embedding_model,
-            nvidia_api_key=NVIDIA_API_KEY,
-            nvidia_model=NVIDIA_MODEL,
+            llm_api_key=GROQ_API_KEY,
+            llm_model=LLM_MODEL,
+            llm_base_url=LLM_BASE_URL,
         )
         result = await tool_import_recipe_from_url({"url": url}, ctx)
         if result.get("error"):
@@ -376,7 +381,7 @@ async def import_recipe(req: ImportRequest, user: dict = Depends(get_current_use
 
 
 # --------------------------------------------------------------------------- #
-# Real-time voice WebSocket (Deepgram STT -> Groq LLM -> ElevenLabs TTS)
+# Real-time voice WebSocket (Deepgram STT -> Groq LLM -> browser Web Speech TTS)
 # --------------------------------------------------------------------------- #
 
 @app.websocket("/ws/chat")
@@ -403,7 +408,7 @@ async def websocket_chat(client_ws: WebSocket):
         await client_ws.close()
         return
 
-    if not DEEPGRAM_API_KEY or not NVIDIA_API_KEY:
+    if not DEEPGRAM_API_KEY or not GROQ_API_KEY:
         print("Missing required API keys in environment.")
         await client_ws.send_json({"type": "error", "message": "Missing API keys on server."})
         await client_ws.close()
@@ -444,19 +449,20 @@ async def websocket_chat(client_ws: WebSocket):
             user_id=user_id,
             http_client=http_client,
             embedding_model=embedding_model,
-            nvidia_api_key=NVIDIA_API_KEY,
-            nvidia_model=NVIDIA_MODEL,
+            llm_api_key=GROQ_API_KEY,
+            llm_model=LLM_MODEL,
+            llm_base_url=LLM_BASE_URL,
         )
 
         try:
-            # NVIDIA NIM tool-calling agent: emits ai_action / ai_text_partial
+            # Groq tool-calling agent: emits ai_action / ai_text_partial
             # events via send_json and returns the final spoken reply.
             ai_reply = await run_agent_turn(
                 user_text=combined_transcript,
                 history=history[:-1],  # agent re-appends the user message itself
                 ctx=ctx,
                 send_json=client_ws.send_json,
-                model=NVIDIA_MODEL,
+                model=LLM_MODEL,
             )
 
             if not ai_reply:
@@ -476,10 +482,10 @@ async def websocket_chat(client_ws: WebSocket):
             })
         except httpx.HTTPStatusError as hse:
             if hse.response.status_code == 429:
-                print("NVIDIA API 429 rate limit hit.")
+                print("Groq API 429 rate limit hit.")
                 await client_ws.send_json({
                     "type": "error",
-                    "message": "NVIDIA API rate limit reached. Please wait a few seconds before speaking again."
+                    "message": "Groq API rate limit reached. Please wait a few seconds before speaking again."
                 })
             else:
                 print(f"HTTP error processing AI response: {hse}")

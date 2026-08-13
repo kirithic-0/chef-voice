@@ -1,7 +1,7 @@
 """
 ChefVoice tool schemas and deterministic executors.
 
-Tools run on the server. Results go back into the NVIDIA agent loop.
+Tools run on the server. Results go back into the Groq agent loop.
 UI sync events are collected as `ui_actions` for the WebSocket client.
 """
 from __future__ import annotations
@@ -49,18 +49,6 @@ WEIGHT_TO_G = {
     "pound": 453.592,
     "pounds": 453.592,
 }
-
-SUBSTITUTION_HINTS = {
-    "cream": "Use coconut cream, cashew cream, or evaporated milk.",
-    "heavy cream": "Use coconut cream or half-and-half plus a little butter.",
-    "butter": "Use olive oil, ghee, or a plant-based butter.",
-    "egg": "Use a flax egg (1 tbsp ground flax + 3 tbsp water) or commercial egg replacer.",
-    "eggs": "Use flax eggs or commercial egg replacer.",
-    "milk": "Use oat, almond, or soy milk.",
-    "yogurt": "Use coconut yogurt or sour cream.",
-    "parmesan": "Use nutritional yeast or pecorino (if dairy is OK).",
-}
-
 
 TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
@@ -139,62 +127,20 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "cancel_timer",
-            "description": "Cancel a running timer by label substring match.",
+            "description": (
+                "Cancel one running timer. Identify it with `label` — use the exact "
+                "label or a duration like '10 minute' when several timers are running "
+                "so the right one is cancelled. Omit `label` only when a single timer "
+                "is active. Active timers and their labels are listed in the context."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "label": {"type": "string"},
-                },
-                "required": ["label"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "scale_recipe",
-            "description": "Scale the active recipe ingredient amounts to a new servings count.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "servings": {"type": "integer", "minimum": 1},
-                },
-                "required": ["servings"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "convert_units",
-            "description": "Convert a kitchen measurement between units.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "amount": {"type": "number"},
-                    "from_unit": {"type": "string"},
-                    "to_unit": {"type": "string"},
-                    "kind": {
+                    "label": {
                         "type": "string",
-                        "enum": ["volume", "weight"],
-                        "description": "Measurement family",
+                        "description": "Timer label, label fragment, or duration (e.g. 'pasta', '10 minute').",
                     },
                 },
-                "required": ["amount", "from_unit", "to_unit"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "suggest_substitution",
-            "description": "Suggest a substitution for an ingredient.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "ingredient": {"type": "string"},
-                },
-                "required": ["ingredient"],
             },
         },
     },
@@ -221,51 +167,6 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "add_to_shopping_list",
-            "description": "Add an item to the user's shopping list.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string"},
-                    "quantity": {"type": "string"},
-                    "unit": {"type": "string"},
-                },
-                "required": ["name"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "save_note",
-            "description": "Save a memory/note for this user, optionally tied to a recipe.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "note": {"type": "string"},
-                    "recipe_id": {"type": "string"},
-                },
-                "required": ["note"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "recall_memories",
-            "description": "Recall saved notes for this user, optionally filtered by recipe.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "recipe_id": {"type": "string"},
-                    "limit": {"type": "integer"},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "import_recipe_from_url",
             "description": "Import a recipe from a public URL into the catalog.",
             "parameters": {
@@ -286,8 +187,10 @@ class ToolContext:
     user_id: str
     http_client: Any
     embedding_model: Any
-    nvidia_api_key: str
-    nvidia_model: str
+    llm_api_key: str
+    llm_model: str
+    # OpenAI-compatible chat endpoint (Groq by default; set from LLM_BASE_URL).
+    llm_base_url: str = "https://api.groq.com/openai/v1/chat/completions"
     ui_actions: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -390,8 +293,22 @@ def build_system_prompt(cooking_state: dict[str, Any]) -> str:
 
     return (
         "You are ChefVoice, a hands-free kitchen voice assistant.\n"
-        "Guide the user through recipes, manage timers, suggest substitutions, and answer cooking questions.\n"
-        "Use tools for search, navigation, timers, scaling, shopping list, memories, and imports.\n"
+        "Help the user find a recipe, then guide them through cooking it hands-free.\n"
+        "Your tools: search_recipes, get_recipe, select_recipe, import_recipe_from_url, "
+        "start_cooking, get_current_step, navigate_step, set_timer, cancel_timer. "
+        "You have no other abilities — you cannot scale recipes, convert units, suggest "
+        "substitutions, manage a shopping list, or save notes; if asked for those, say so briefly.\n"
+        "You do NOT have the recipe catalog memorized. To find, recommend, or name ANY recipe "
+        "you MUST call the search_recipes tool first, and only mention recipes it returns — "
+        "never invent recipe names or answer recipe requests from your own knowledge. "
+        "When the user describes a dish or asks for ideas (screen 'home' or 'detail'), call "
+        "search_recipes, then read back the top suggestions by name so they can pick one to cook.\n"
+        "ALWAYS take actions by calling the provided tools/functions through the tool-calling "
+        "mechanism. To move between steps you MUST call the navigate_step tool — never just "
+        "describe the move. To start a timer, call set_timer. Do not act by writing text.\n"
+        "NEVER write a tool call, function name, XML/HTML tag, angle brackets, or JSON in your "
+        "reply. Your reply is read aloud, so it must be plain spoken sentences only — "
+        "no markup like <navigate_step> and no code.\n"
         "For simple greetings or small talk (hi, hello, thanks), reply briefly in spoken language without calling tools.\n"
         "After tools finish, reply with natural spoken text only (no JSON, no markdown).\n"
         "When navigating or repeating a step, read that step's instructions completely and verbatim.\n"
@@ -510,11 +427,44 @@ async def tool_navigate_step(args: dict, ctx: ToolContext) -> dict:
     }
 
 
+def _humanize_duration(seconds: int) -> str:
+    """A distinct default label so multiple timers can be told apart."""
+    if seconds >= 3600 and seconds % 3600 == 0:
+        return f"{seconds // 3600}-hour timer"
+    if seconds >= 60 and seconds % 60 == 0:
+        return f"{seconds // 60}-minute timer"
+    if seconds >= 60:
+        return f"{seconds // 60}m {seconds % 60}s timer"
+    return f"{seconds}-second timer"
+
+
+def _duration_from_text(text: str) -> Optional[int]:
+    """Parse a spoken duration ('10 minute', '90 sec', '5') into seconds."""
+    m = re.search(r"(\d+)\s*(hours?|hrs?|minutes?|mins?|seconds?|secs?)?", text.lower())
+    if not m:
+        return None
+    n = int(m.group(1))
+    unit = m.group(2) or ""
+    if unit.startswith(("hour", "hr")):
+        return n * 3600
+    if unit.startswith(("sec",)):
+        return n
+    if unit.startswith(("min",)):
+        return n * 60
+    return n * 60  # bare number in a kitchen usually means minutes
+
+
+def _timer_summary(timers: list[dict]) -> list[dict]:
+    return [{"label": t.get("label"), "timeLeft": t.get("timeLeft")} for t in timers]
+
+
 async def tool_set_timer(args: dict, ctx: ToolContext) -> dict:
     duration = int(args.get("duration", 0))
     if duration <= 0:
         return {"error": "duration must be positive seconds"}
-    label = args.get("label") or "Cooking Timer"
+    raw = (args.get("label") or "").strip()
+    # Give unlabeled/generic timers a distinct name so they can be cancelled precisely.
+    label = raw if raw and raw.lower() not in {"cooking timer", "timer"} else _humanize_duration(duration)
     timer = {
         "id": f"timer-{uuid.uuid4().hex[:10]}",
         "label": label,
@@ -530,51 +480,44 @@ async def tool_set_timer(args: dict, ctx: ToolContext) -> dict:
 
 
 async def tool_cancel_timer(args: dict, ctx: ToolContext) -> dict:
-    label = (args.get("label") or "").lower()
     timers = list(ctx.cooking_state.get("timers") or [])
-    match = next((t for t in timers if label in str(t.get("label", "")).lower()), None)
-    if not match:
-        return {"error": f"No timer matching label '{args.get('label')}'", "timers": timers}
+    if not timers:
+        return {"error": "There are no active timers to cancel."}
+
+    label = (args.get("label") or "").strip()
+
+    if not label:
+        # Only unambiguous when a single timer is running.
+        if len(timers) == 1:
+            match = timers[0]
+        else:
+            return {
+                "error": "Multiple timers are running — ask the user which one to cancel.",
+                "timers": _timer_summary(timers),
+            }
+    else:
+        low = label.lower()
+        # 1) exact label, 2) label fragment, 3) matching duration.
+        candidates = [t for t in timers if str(t.get("label", "")).lower() == low]
+        if not candidates:
+            candidates = [t for t in timers if low in str(t.get("label", "")).lower()]
+        if not candidates:
+            secs = _duration_from_text(label)
+            if secs is not None:
+                candidates = [t for t in timers if int(t.get("duration", 0)) == secs]
+        if not candidates:
+            return {"error": f"No timer matches '{label}'.", "timers": _timer_summary(timers)}
+        if len(candidates) > 1:
+            return {
+                "error": f"Several timers match '{label}' — ask the user which one to cancel.",
+                "matches": _timer_summary(candidates),
+            }
+        match = candidates[0]
+
     timers = [t for t in timers if t.get("id") != match.get("id")]
     ctx.cooking_state["timers"] = timers
     ctx.ui_actions.append({"type": "cancel_timer", "params": {"label": match.get("label"), "id": match.get("id")}})
-    return {"status": "ok", "cancelled": match}
-
-
-async def tool_scale_recipe(args: dict, ctx: ToolContext) -> dict:
-    recipe = ctx.cooking_state.get("recipe")
-    if not recipe:
-        return {"error": "No active recipe to scale"}
-    new_servings = int(args.get("servings", 0))
-    if new_servings < 1:
-        return {"error": "servings must be >= 1"}
-    base = int(recipe.get("servings") or 1)
-    scaled = scale_ingredients(recipe.get("ingredients") or [], base, new_servings)
-    recipe = dict(recipe)
-    recipe["ingredients"] = scaled
-    recipe["servings"] = new_servings
-    ctx.cooking_state["recipe"] = recipe
-    ctx.ui_actions.append({
-        "type": "scale_recipe",
-        "params": {"servings": new_servings, "ingredients": scaled},
-    })
-    return {"status": "ok", "servings": new_servings, "ingredients": scaled}
-
-
-async def tool_convert_units(args: dict, ctx: ToolContext) -> dict:
-    kind = args.get("kind") or "volume"
-    return convert_units(float(args["amount"]), args["from_unit"], args["to_unit"], kind)
-
-
-async def tool_suggest_substitution(args: dict, ctx: ToolContext) -> dict:
-    ingredient = (args.get("ingredient") or "").strip().lower()
-    for key, hint in SUBSTITUTION_HINTS.items():
-        if key in ingredient or ingredient in key:
-            return {"ingredient": args.get("ingredient"), "suggestion": hint}
-    return {
-        "ingredient": args.get("ingredient"),
-        "suggestion": f"Try a similar pantry staple with the same role as {args.get('ingredient')}, and adjust seasoning to taste.",
-    }
+    return {"status": "ok", "cancelled": {"label": match.get("label"), "id": match.get("id")}}
 
 
 async def tool_select_recipe(args: dict, ctx: ToolContext) -> dict:
@@ -607,33 +550,6 @@ async def tool_start_cooking(args: dict, ctx: ToolContext) -> dict:
     }
 
 
-async def tool_add_to_shopping_list(args: dict, ctx: ToolContext) -> dict:
-    name = (args.get("name") or "").strip()
-    if not name:
-        return {"error": "name is required"}
-    item = db.add_shopping_list_item(
-        ctx.user_id, name, args.get("quantity") or "", args.get("unit") or ""
-    )
-    ctx.ui_actions.append({"type": "shopping_list_updated", "params": {"item": item}})
-    return {"status": "ok", "item": item}
-
-
-async def tool_save_note(args: dict, ctx: ToolContext) -> dict:
-    note = (args.get("note") or "").strip()
-    if not note:
-        return {"error": "note is required"}
-    recipe_id = args.get("recipe_id") or (ctx.cooking_state.get("recipe") or {}).get("id")
-    memory = db.add_memory(ctx.user_id, note, recipe_id)
-    ctx.ui_actions.append({"type": "memory_saved", "params": {"memory": memory}})
-    return {"status": "ok", "memory": memory}
-
-
-async def tool_recall_memories(args: dict, ctx: ToolContext) -> dict:
-    limit = int(args.get("limit") or 5)
-    memories = db.list_memories(ctx.user_id, args.get("recipe_id"), limit)
-    return {"memories": memories}
-
-
 async def tool_import_recipe_from_url(args: dict, ctx: ToolContext) -> dict:
     url = (args.get("url") or "").strip()
     if not url.startswith("http"):
@@ -660,9 +576,8 @@ async def tool_import_recipe_from_url(args: dict, ctx: ToolContext) -> dict:
         "steps (array of {step, text, timer_duration, safety_alert}). "
         "timer_duration is seconds or null. safety_alert is string or null."
     )
-    nvidia_url = "https://integrate.api.nvidia.com/v1/chat/completions"
     body = {
-        "model": ctx.nvidia_model,
+        "model": ctx.llm_model,
         "messages": [
             {"role": "system", "content": extract_prompt},
             {"role": "user", "content": text},
@@ -670,11 +585,11 @@ async def tool_import_recipe_from_url(args: dict, ctx: ToolContext) -> dict:
         "temperature": 0.2,
     }
     headers = {
-        "Authorization": f"Bearer {ctx.nvidia_api_key}",
+        "Authorization": f"Bearer {ctx.llm_api_key}",
         "Content-Type": "application/json",
     }
     try:
-        nresp = await ctx.http_client.post(nvidia_url, headers=headers, json=body, timeout=60.0)
+        nresp = await ctx.http_client.post(ctx.llm_base_url, headers=headers, json=body, timeout=60.0)
         nresp.raise_for_status()
         content = nresp.json()["choices"][0]["message"]["content"].strip()
         content = re.sub(r"^```json\s*|\s*```$", "", content, flags=re.I | re.M).strip()
@@ -715,14 +630,8 @@ TOOL_HANDLERS: dict[str, Callable] = {
     "navigate_step": tool_navigate_step,
     "set_timer": tool_set_timer,
     "cancel_timer": tool_cancel_timer,
-    "scale_recipe": tool_scale_recipe,
-    "convert_units": tool_convert_units,
-    "suggest_substitution": tool_suggest_substitution,
     "select_recipe": tool_select_recipe,
     "start_cooking": tool_start_cooking,
-    "add_to_shopping_list": tool_add_to_shopping_list,
-    "save_note": tool_save_note,
-    "recall_memories": tool_recall_memories,
     "import_recipe_from_url": tool_import_recipe_from_url,
 }
 

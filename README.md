@@ -16,7 +16,7 @@ Navigate cooking steps hands-free, set smart timers, ask questions about ingredi
 | **Barge-In Capabilities** | The assistant is truly conversational. Interrupt the AI mid-sentence and it will instantly stop talking and listen to your new command. |
 | **Spoken Responses** | The browser Web Speech API voices the assistant's replies — instant, and no cloud TTS key required. |
 | **Semantic Search (RAG)** | Recipes are embedded with `all-MiniLM-L6-v2` and ranked by NumPy cosine similarity for meaning-based search — type "spicy creamy curry" and get the right dishes without keyword matches. |
-| **Tool-Calling Agent** | An NVIDIA NIM agent (`mistral-nemotron`) runs a multi-round tool-calling loop over 15 server-side tools — search, step navigation, timers, recipe scaling, unit conversion, substitutions, shopping list, memory, and URL import. |
+| **Tool-Calling Agent** | A Groq agent (`llama-3.3-70b-versatile`) runs a multi-round tool-calling loop over 15 server-side tools — search, step navigation, timers, recipe scaling, unit conversion, substitutions, shopping list, memory, and URL import. |
 | **Shopping List & Memory** | Ask the assistant to "add eggs to my list" or "remember I used less salt" — items and notes persist per user and sync to the UI. |
 | **Recipe Import** | Paste a recipe URL (or ask by voice); the agent scrapes the page, extracts structured recipe JSON, embeds it, and adds it to the catalogue. |
 | **Speech-to-Text Input** | Deepgram `nova-2` streaming API provides sub-second, highly accurate transcription of continuous audio streams. |
@@ -32,7 +32,7 @@ Navigate cooking steps hands-free, set smart timers, ask questions about ingredi
 * Python 3.9+
 * Node.js 16+ and npm
 * API keys for the voice pipeline (optional — everything except the live voice assistant works without them):
-  [Deepgram](https://deepgram.com/) (speech-to-text) and [NVIDIA NIM](https://build.nvidia.com/) (the tool-calling agent). Text-to-speech uses the browser, so no TTS key is needed.
+  [Deepgram](https://deepgram.com/) (speech-to-text) and [Groq](https://console.groq.com/) (the tool-calling agent). Text-to-speech uses the browser, so no TTS key is needed.
 
 There is **no database server to install** — the app creates a local SQLite file on first run.
 
@@ -90,7 +90,7 @@ There is **no database server to install** — the app creates a local SQLite fi
 | Variable | Required | Description |
 | --- | --- | --- |
 | `DEEPGRAM_API_KEY` | Voice only | Deepgram API key for real-time speech-to-text |
-| `NVIDIA_API_KEY` | Voice only | NVIDIA NIM API key for the tool-calling agent |
+| `GROQ_API_KEY` | Voice only | Groq API key for the tool-calling agent ([console.groq.com/keys](https://console.groq.com/keys)) |
 | `JWT_SECRET` | Recommended | Secret for signing session tokens (use a long random string in production) |
 | `FRONTEND_ORIGIN` | Optional | Comma-separated allowed CORS origins (default `http://localhost:5173,http://127.0.0.1:5173`) |
 | `CHEFVOICE_DB` | Optional | Path to the SQLite file (default `backend/chefvoice.db`) |
@@ -116,7 +116,7 @@ There is **no database server to install** — the app creates a local SQLite fi
 | **NumPy** | In-process cosine-similarity vector search |
 | **PyJWT + bcrypt** | Self-hosted JWT authentication with hashed passwords |
 | **Deepgram** | Streaming Speech-to-Text (ASR) engine |
-| **NVIDIA NIM** | Tool-calling LLM agent (`mistral-nemotron`) |
+| **Groq** | Tool-calling LLM agent (`llama-3.3-70b-versatile`) |
 
 #### Frontend
 | Technology | Purpose |
@@ -151,7 +151,7 @@ layer by scoping every query to the authenticated user id from the JWT.
 Real-time conversational voice interaction, streaming audio in and out.
 
 * **Client → Server**: Client streams raw microphone audio captured via the Web Audio API, plus JSON control frames for cooking-state sync and text input.
-* **Server → Client**: Server transcribes the audio, runs the NVIDIA tool-calling agent, and streams back the agent's text tokens plus structured tool/UI events (timers, step navigation, shopping-list updates, etc.). The browser speaks the final reply with the Web Speech API.
+* **Server → Client**: Server transcribes the audio, runs the Groq tool-calling agent, and streams back the agent's text tokens plus structured tool/UI events (timers, step navigation, shopping-list updates, etc.). The browser speaks the final reply with the Web Speech API.
 
 ### REST — Recipes, Profile, Favorites, History
 All REST endpoints require an `Authorization: Bearer <jwt>` header.

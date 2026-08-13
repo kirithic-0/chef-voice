@@ -26,9 +26,31 @@ def test_convert_units_volume():
     assert abs(result["amount"] - 236.588) < 0.1
 
 
-def test_tool_definitions_have_no_allergens():
-    names = [t["function"]["name"] for t in tools.TOOL_DEFINITIONS]
-    assert "check_allergens" not in names
-    assert "search_recipes" in names
-    assert "navigate_step" in names
-    assert "add_to_shopping_list" in names
+def test_tool_definitions_are_the_trimmed_set():
+    names = {t["function"]["name"] for t in tools.TOOL_DEFINITIONS}
+    # The agent keeps recipe-discovery, cooking-flow, and timer tools...
+    assert names == {
+        "search_recipes", "get_recipe", "select_recipe", "import_recipe_from_url",
+        "start_cooking", "get_current_step", "navigate_step",
+        "set_timer", "cancel_timer",
+    }
+    # ...and the kitchen-helper / shopping-list / memory tools were removed.
+    for gone in ("scale_recipe", "convert_units", "suggest_substitution",
+                 "add_to_shopping_list", "save_note", "recall_memories"):
+        assert gone not in names
+    # TOOL_HANDLERS stays in lockstep with the definitions.
+    assert set(tools.TOOL_HANDLERS) == names
+
+
+def test_set_timer_gives_distinct_default_labels():
+    assert tools._humanize_duration(600) == "10-minute timer"
+    assert tools._humanize_duration(90) == "1m 30s timer"
+    assert tools._humanize_duration(3600) == "1-hour timer"
+    assert tools._humanize_duration(45) == "45-second timer"
+
+
+def test_duration_from_text_parses_spoken_durations():
+    assert tools._duration_from_text("10 minute") == 600
+    assert tools._duration_from_text("90 seconds") == 90
+    assert tools._duration_from_text("1 hour") == 3600
+    assert tools._duration_from_text("5") == 300  # bare number => minutes

@@ -5,6 +5,7 @@ import { getToken, getWsUrl } from '../lib/api';
 export function useVoiceChat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isRecording, setIsRecording] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
   const [isAiSpeaking, setIsAiSpeaking] = useState(false);
   const [isAiThinking, setIsAiThinking] = useState(false);
   const [status, setStatus] = useState<'idle' | 'connecting' | 'recording' | 'isAiThinking' | 'isAiSpeaking'>('idle');
@@ -212,6 +213,7 @@ export function useVoiceChat() {
         }
       });
       audioStreamRef.current = stream;
+      setIsMuted(false); // a fresh mic stream always starts live
 
       // 2. Setup Web Audio Analyser
       if (!audioContextRef.current) {
@@ -275,7 +277,7 @@ export function useVoiceChat() {
           setIsAiThinking(false);
           speakWebSpeech(data.text);
         } else if (data.type === 'ai_text_partial') {
-          // Progressive tokens streamed from the NVIDIA agent; keep the
+          // Progressive tokens streamed from the Groq agent; keep the
           // thinking indicator up until the final ai_text arrives.
           setIsAiThinking(true);
         } else if (data.type === 'ai_audio_chunk') {
@@ -377,11 +379,31 @@ export function useVoiceChat() {
     setMessages([]);
     setInterimTranscript('');
     setIsRecording(false);
+    setIsMuted(false);
     setIsAiThinking(false);
     setIsAiSpeaking(false);
     setStatus('idle');
     setLatestAction(null);
     setAnalyser(null);
+  };
+
+  // Toggle the microphone on/off without tearing down the session. Muting
+  // disables the audio track so silence (not your voice) streams to Deepgram —
+  // the assistant stops hearing you until you unmute.
+  const toggleMute = () => {
+    setIsMuted((prev) => {
+      const next = !prev;
+      const stream = audioStreamRef.current;
+      if (stream) {
+        stream.getAudioTracks().forEach((track) => {
+          track.enabled = !next;
+        });
+      }
+      if (next) {
+        setInterimTranscript('');
+      }
+      return next;
+    });
   };
 
   // Send state update
@@ -420,6 +442,8 @@ export function useVoiceChat() {
     messages,
     interimTranscript,
     isRecording,
+    isMuted,
+    toggleMute,
     isAiSpeaking,
     isAiThinking,
     status,
