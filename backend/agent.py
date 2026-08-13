@@ -15,8 +15,8 @@ from tools import TOOL_DEFINITIONS, ToolContext, build_system_prompt, execute_to
 NVIDIA_CHAT_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 # Tool-calling models on NVIDIA NIM. Override the primary via the NVIDIA_MODEL
 # env var; the fallback is a smaller/faster model used on timeout or 5xx.
-DEFAULT_MODEL = "meta/llama-3.1-8b-instruct"
-FALLBACK_MODEL = "meta/llama-3.1-70b-instruct"
+DEFAULT_MODEL = "meta/llama-3.1-70b-instruct"
+FALLBACK_MODEL = "meta/llama-3.1-8b-instruct"
 MAX_TOOL_ROUNDS = 4
 TOOL_CALL_TIMEOUT = 25.0
 STREAM_TIMEOUT = 45.0
