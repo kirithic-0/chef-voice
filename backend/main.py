@@ -15,13 +15,17 @@ from sentence_transformers import SentenceTransformer
 
 import database as db
 import auth
+from agent import DEFAULT_MODEL, run_agent_turn
+from tools import ToolContext
 
 load_dotenv()
 
-# Third-party API keys for the real-time voice pipeline (STT / LLM / TTS).
+# Third-party API keys for the real-time voice pipeline.
+# Deepgram = streaming speech-to-text; NVIDIA NIM = tool-calling LLM agent.
+# Text-to-speech is handled client-side with the browser Web Speech API.
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY")
+NVIDIA_MODEL = os.getenv("NVIDIA_MODEL", DEFAULT_MODEL)
 
 # Comma-separated list of allowed frontend origins (defaults to the Vite dev server).
 FRONTEND_ORIGINS = [
@@ -96,6 +100,29 @@ class RecipeCreate(BaseModel):
     image_url: str | None = None
     ingredients: list[dict]
     steps: list[dict]
+
+
+class ShoppingItemCreate(BaseModel):
+    name: str
+    quantity: str = ""
+    unit: str = ""
+    checked: bool = False
+
+
+class ShoppingItemUpdate(BaseModel):
+    name: str | None = None
+    quantity: str | None = None
+    unit: str | None = None
+    checked: bool | None = None
+
+
+class MemoryCreate(BaseModel):
+    note: str
+    recipe_id: str | None = None
+
+
+class ImportRequest(BaseModel):
+    url: str
 
 
 # --------------------------------------------------------------------------- #
@@ -269,6 +296,86 @@ def post_conversation(conv: ConversationCreate, user: dict = Depends(get_current
 
 
 # --------------------------------------------------------------------------- #
+# Shopping list endpoints (also driven by the agent's shopping-list tool)
+# --------------------------------------------------------------------------- #
+
+@app.get("/shopping-list")
+def get_shopping_list(user: dict = Depends(get_current_user)):
+    return db.list_shopping_list(user["id"])
+
+
+@app.post("/shopping-list")
+def post_shopping_item(item: ShoppingItemCreate, user: dict = Depends(get_current_user)):
+    name = item.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    return db.add_shopping_list_item(user["id"], name, item.quantity, item.unit, item.checked)
+
+
+@app.patch("/shopping-list/{item_id}")
+def patch_shopping_item(item_id: str, patch: ShoppingItemUpdate, user: dict = Depends(get_current_user)):
+    fields = patch.model_dump(exclude_unset=True)
+    if not fields:
+        raise HTTPException(status_code=400, detail="No updatable fields")
+    updated = db.update_shopping_list_item(item_id, user["id"], fields)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return updated
+
+
+@app.delete("/shopping-list/{item_id}")
+def delete_shopping_item(item_id: str, user: dict = Depends(get_current_user)):
+    db.delete_shopping_list_item(item_id, user["id"])
+    return {"status": "success"}
+
+
+# --------------------------------------------------------------------------- #
+# Memory endpoints (also driven by the agent's save_note / recall_memories tools)
+# --------------------------------------------------------------------------- #
+
+@app.get("/memories")
+def get_memories(recipe_id: str | None = None, limit: int = 20, user: dict = Depends(get_current_user)):
+    return db.list_memories(user["id"], recipe_id, limit)
+
+
+@app.post("/memories")
+def post_memory(memory: MemoryCreate, user: dict = Depends(get_current_user)):
+    note = memory.note.strip()
+    if not note:
+        raise HTTPException(status_code=400, detail="note is required")
+    return db.add_memory(user["id"], note, memory.recipe_id)
+
+
+# --------------------------------------------------------------------------- #
+# Recipe import (fetch a URL and extract a recipe with the agent's import tool)
+# --------------------------------------------------------------------------- #
+
+@app.post("/recipes/import")
+async def import_recipe(req: ImportRequest, user: dict = Depends(get_current_user)):
+    if not NVIDIA_API_KEY:
+        raise HTTPException(status_code=500, detail="NVIDIA_API_KEY is not configured.")
+    url = req.url.strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="url is required")
+
+    from tools import tool_import_recipe_from_url
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        ctx = ToolContext(
+            cooking_state={},
+            user_id=user["id"],
+            http_client=client,
+            embedding_model=embedding_model,
+            nvidia_api_key=NVIDIA_API_KEY,
+            nvidia_model=NVIDIA_MODEL,
+        )
+        result = await tool_import_recipe_from_url({"url": url}, ctx)
+        if result.get("error"):
+            raise HTTPException(status_code=400, detail=result["error"])
+        return result
+
+
+# --------------------------------------------------------------------------- #
 # Real-time voice WebSocket (Deepgram STT -> Groq LLM -> ElevenLabs TTS)
 # --------------------------------------------------------------------------- #
 
@@ -296,7 +403,7 @@ async def websocket_chat(client_ws: WebSocket):
         await client_ws.close()
         return
 
-    if not DEEPGRAM_API_KEY or not GROQ_API_KEY or not ELEVENLABS_API_KEY:
+    if not DEEPGRAM_API_KEY or not NVIDIA_API_KEY:
         print("Missing required API keys in environment.")
         await client_ws.send_json({"type": "error", "message": "Missing API keys on server."})
         await client_ws.close()
@@ -316,7 +423,6 @@ async def websocket_chat(client_ws: WebSocket):
         "current_step": 0,
         "timers": [],
         "tts_mode": "web_speech",
-        "allergies": [],
         "dietary_preferences": []
     }
 
@@ -324,59 +430,6 @@ async def websocket_chat(client_ws: WebSocket):
 
     # Initialize long-running HTTP Client
     http_client = httpx.AsyncClient(timeout=30.0)
-
-    async def stream_elevenlabs_audio(text: str):
-        voice_id = "EXAVITQu4vr4xnSDxMaL"  # default voice
-        el_url = f"wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream-input?model_id=eleven_monolingual_v1&output_format=pcm_16000"
-
-        print("Connecting to ElevenLabs WebSocket for streaming TTS...")
-        try:
-            async with websockets.connect(el_url) as el_ws:
-                # 1. Send Configuration
-                config_msg = {
-                    "text": " ",
-                    "voice_settings": {
-                        "stability": 0.5,
-                        "similarity_boost": 0.75
-                    },
-                    "xi_api_key": ELEVENLABS_API_KEY
-                }
-                await el_ws.send(json.dumps(config_msg))
-
-                # 2. Send Text
-                input_msg = {
-                    "text": f"{text} ",
-                    "try_trigger_generation": True
-                }
-                await el_ws.send(json.dumps(input_msg))
-
-                # 3. Send EOS
-                eos_msg = {"text": ""}
-                await el_ws.send(json.dumps(eos_msg))
-
-                # 4. Stream audio back
-                while True:
-                    resp = await el_ws.recv()
-                    data = json.loads(resp)
-                    audio_b64 = data.get("audio")
-                    if audio_b64:
-                        await client_ws.send_json({
-                            "type": "ai_audio_chunk",
-                            "audio": audio_b64
-                        })
-                    if data.get("isFinal") or not audio_b64:
-                        break
-
-                # Send completion signal
-                await client_ws.send_json({"type": "ai_audio_end"})
-                print("ElevenLabs TTS streaming completed.")
-        except Exception as e:
-            print(f"Error in ElevenLabs streaming TTS: {e}")
-            await client_ws.send_json({
-                "type": "error",
-                "message": "ElevenLabs premium voice connection failed. Reverting to web speech."
-            })
-            await client_ws.send_json({"type": "ai_audio_end"})
 
     async def process_user_turn(combined_transcript):
         # Send user transcript to client
@@ -386,129 +439,47 @@ async def websocket_chat(client_ws: WebSocket):
         })
         history.append({"role": "user", "content": combined_transcript})
 
-        # Construct dynamic cooking context system prompt
-        recipe = cooking_state.get("recipe")
-        current_step_idx = cooking_state.get("current_step", 0)
-        screen = cooking_state.get("screen", "home")
-        timers = cooking_state.get("timers", [])
-        allergies = cooking_state.get("allergies", [])
-        dietary_prefs = cooking_state.get("dietary_preferences", [])
-
-        recipe_context = "None"
-        step_context = "None"
-        if recipe:
-            recipe_context = (
-                f"Title: {recipe.get('title')}\n"
-                f"Cuisine: {recipe.get('cuisine')}\n"
-                f"Ingredients: {json.dumps(recipe.get('ingredients'))}\n"
-                f"All Recipe Steps: {json.dumps(recipe.get('steps'))}"
-            )
-            steps = recipe.get("steps", [])
-            if 0 <= current_step_idx < len(steps):
-                curr_step = steps[current_step_idx]
-                step_context = f"Step {current_step_idx + 1} of {len(steps)}: {curr_step.get('text')}"
-                if curr_step.get('safety_alert'):
-                    step_context += f" (SAFETY ALERT: {curr_step.get('safety_alert')})"
-                if curr_step.get('timer_duration'):
-                    step_context += f" (Suggested Timer: {curr_step.get('timer_duration')} seconds)"
-
-        timers_context = json.dumps(timers)
-        allergies_str = ", ".join(allergies) if allergies else "None"
-        dietary_str = ", ".join(dietary_prefs) if dietary_prefs else "None"
-
-        system_prompt = (
-            "You are ChefVoice, a hands-free kitchen voice assistant.\n"
-            "Your goal is to guide the user step-by-step through recipes, manage timers, suggest substitutions, and answer cooking questions.\n\n"
-            f"Current Screen: {screen}\n"
-            "You can help the user search for recipes or select a recipe from their screen. If they request a recipe search (e.g., 'find chicken recipes' or 'show me desserts'), trigger a 'search_recipes' action with the query.\n\n"
-            f"Current Active Recipe Details:\n{recipe_context}\n"
-            f"Current Active Cooking Step:\n{step_context}\n"
-            f"Active Running Timers: {timers_context}\n"
-            f"User Allergies: {allergies_str}\n"
-            f"User Dietary Preferences: {dietary_str}\n\n"
-            "ALLERGEN RULE: Do NOT verbally warn the user about allergies or dietary preferences in your response text. The frontend UI already handles showing allergen warnings, so you do not need to repeat them in every turn unless the user explicitly asks you about ingredients or safety.\n\n"
-            "STEP READING RULE: When navigating to a new step (e.g., moving next or previous), repeating a step, or when the user asks what the step is, your 'text' response MUST read out that target step's instructions completely and verbatim from the 'All Recipe Steps' list. Do NOT summarize, shorten, or omit details of the recipe step instructions. For example, if the current step is Step 1 and the user says 'next', look up Step 2 in the steps list and read its text completely. You may prefix it with the step number (e.g., 'Step 2: [step text]') and optionally append a short question (e.g., 'Let me know when you are ready.').\n\n"
-            "COOKING QUESTIONS RULE: If the user asks a question, requests an ingredient substitution, or seeks clarification about the recipe or cooking process (e.g., 'Am I supposed to serve the chicken or the salt?'), your 'text' response MUST answer their question directly and concisely. Do NOT repeat or read out the active step instructions in full when answering general questions; just answer the question directly and keep the action type as 'none'.\n\n"
-            "NAVIGATION RULE: You are a state router. You must inspect the 'Current Active Cooking Step' (e.g., 'Step 3 of 4'). The final step is the last number (e.g. 4). Do NOT say the recipe is completed or there are no more steps unless the user is already on the final step (e.g. Step 4 of 4) and says they are done. If the user is on an earlier step (e.g., Step 3 of 4) and says 'done', 'next', 'ready', or 'move on', you MUST return action type 'next_step' so the frontend can increment the step.\n\n"
-            "You must respond ONLY with a JSON object. Do not include markdown code block formatting (like ```json). Just return raw JSON.\n"
-            "The JSON object must follow this schema:\n"
-            "{\n"
-            '  "text": "Your spoken reply to the user. Answer cooking questions directly and concisely. If navigating or repeating a step, read the active step instructions in full.",\n'
-            '  "action": {\n'
-            '    "type": "next_step" | "prev_step" | "repeat_step" | "set_timer" | "cancel_timer" | "search_recipes" | "select_recipe" | "start_cooking" | "none",\n'
-            '    "params": {\n'
-            '      "duration": 300, // (integer, in seconds) only for set_timer\n'
-            '      "label": "timer label", // (string) for set_timer or cancel_timer\n'
-            '      "query": "search query", // (string) for search_recipes\n'
-            '      "id": "recipe_id" // (string) only for select_recipe\n'
-            "    }\n"
-            "  }\n"
-            "}\n\n"
-            "Guidelines for Actions:\n"
-            "- CRITICAL: If the Current Screen is 'cooking', do NOT output action types 'search_recipes' or 'select_recipe'. Only navigation (next_step, prev_step, repeat_step), timers (set_timer, cancel_timer), or none are allowed.\n"
-            "- If the user says 'done', 'next', 'ready', or 'move on', return action type 'next_step'.\n"
-            "- If the user says 'previous', 'go back', or 'last step', return action type 'prev_step'.\n"
-            "- If the user says 'repeat' or 'say it again', return action type 'repeat_step'.\n"
-            "- If the user asks to start cooking or begin, return action type 'start_cooking'.\n"
-            "- If the user wants to search (e.g. 'show me chicken recipes' or 'find vegetarian dishes'), return action type 'search_recipes' with the query.\n"
-            "- If the user asks for a timer (e.g. 'set a 5 minute timer'), return action type 'set_timer' with the duration in seconds.\n"
-            "- If the user asks 'how much time is left?', check the active running timers context and answer verbally with action type 'none'.\n"
-            "- If the user asks for a substitution (e.g. 'what can I use instead of cream?'), explain it verbally with action type 'none'.\n"
+        ctx = ToolContext(
+            cooking_state=cooking_state,
+            user_id=user_id,
+            http_client=http_client,
+            embedding_model=embedding_model,
+            nvidia_api_key=NVIDIA_API_KEY,
+            nvidia_model=NVIDIA_MODEL,
         )
 
         try:
-            groq_url = "https://api.groq.com/openai/v1/chat/completions"
-            groq_headers = {
-                "Authorization": f"Bearer {GROQ_API_KEY}",
-                "Content-Type": "application/json"
-            }
-            groq_body = {
-                "model": "llama-3.3-70b-versatile",
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    *history[-6:]  # Keep context short for speed
-                ],
-                "response_format": {"type": "json_object"}
-            }
-            groq_resp = await http_client.post(groq_url, headers=groq_headers, json=groq_body)
-            groq_resp.raise_for_status()
-            groq_data = groq_resp.json()
+            # NVIDIA NIM tool-calling agent: emits ai_action / ai_text_partial
+            # events via send_json and returns the final spoken reply.
+            ai_reply = await run_agent_turn(
+                user_text=combined_transcript,
+                history=history[:-1],  # agent re-appends the user message itself
+                ctx=ctx,
+                send_json=client_ws.send_json,
+                model=NVIDIA_MODEL,
+            )
 
-            raw_reply = groq_data["choices"][0]["message"]["content"].strip()
-            print(f"Groq Raw JSON: {raw_reply}")
+            if not ai_reply:
+                ai_reply = "Sorry, I did not catch that. Could you say it again?"
 
-            reply_json = json.loads(raw_reply)
-            ai_reply = reply_json.get("text", "")
-            action_data = reply_json.get("action", {"type": "none", "params": {}})
-
-            # Send action to client first for fast UI updates
-            await client_ws.send_json({
-                "type": "ai_action",
-                "action": action_data
-            })
-
-            # Send AI text to client
-            await client_ws.send_json({
-                "type": "ai_text",
-                "text": ai_reply
-            })
+            await client_ws.send_json({"type": "ai_text", "text": ai_reply})
             history.append({"role": "assistant", "content": ai_reply})
 
-            # Process Audio Synthesis
-            if cooking_state.get("tts_mode") == "elevenlabs" and ai_reply:
-                await stream_elevenlabs_audio(ai_reply)
-            else:
-                # Send audio completion signal immediately to resume mic (as Web Speech will play it on client)
-                await client_ws.send_json({
-                    "type": "ai_audio_none"
-                })
+            # Web Speech only: the client speaks ai_text; no cloud TTS.
+            await client_ws.send_json({"type": "ai_audio_none"})
 
+        except httpx.TimeoutException as te:
+            print(f"Timeout processing AI response: {type(te).__name__}: {te!r}")
+            await client_ws.send_json({
+                "type": "error",
+                "message": "The AI model took too long to respond. Please try speaking again."
+            })
         except httpx.HTTPStatusError as hse:
             if hse.response.status_code == 429:
-                print("Groq API 429 rate limit hit.")
+                print("NVIDIA API 429 rate limit hit.")
                 await client_ws.send_json({
                     "type": "error",
-                    "message": "Groq API rate limit reached. Please wait a few seconds before speaking again."
+                    "message": "NVIDIA API rate limit reached. Please wait a few seconds before speaking again."
                 })
             else:
                 print(f"HTTP error processing AI response: {hse}")
@@ -517,7 +488,9 @@ async def websocket_chat(client_ws: WebSocket):
                     "message": f"Server connection error ({hse.response.status_code}). Please try again."
                 })
         except Exception as e:
-            print(f"Error processing AI response: {e}")
+            print(f"Error processing AI response: {type(e).__name__}: {e!r}")
+            import traceback
+            traceback.print_exc()
             await client_ws.send_json({
                 "type": "error",
                 "message": "An unexpected error occurred. Please try speaking again."

@@ -43,12 +43,32 @@ export interface Message {
 }
 
 export interface VoiceAction {
-  type: 'next_step' | 'prev_step' | 'repeat_step' | 'set_timer' | 'cancel_timer' | 'search_recipes' | 'select_recipe' | 'start_cooking' | 'none';
+  type:
+    | 'next_step'
+    | 'prev_step'
+    | 'repeat_step'
+    | 'set_timer'
+    | 'cancel_timer'
+    | 'search_recipes'
+    | 'select_recipe'
+    | 'start_cooking'
+    | 'scale_recipe'
+    | 'shopping_list_updated'
+    | 'memory_saved'
+    | 'recipe_imported'
+    | 'none';
   params?: {
     duration?: number;
     label?: string;
     query?: string;
     id?: string;
+    step_index?: number;
+    servings?: number;
+    ingredients?: Ingredient[];
+    results?: Recipe[];
+    item?: ShoppingListItem;
+    memory?: UserMemory;
+    recipe?: Recipe;
   };
 }
 
@@ -70,6 +90,24 @@ export interface AuthUser {
 export interface AppSession {
   access_token: string;
   user: AuthUser;
+}
+
+export interface ShoppingListItem {
+  id: string;
+  user_id: string;
+  name: string;
+  quantity: string;
+  unit: string;
+  checked: boolean;
+  created_at?: string;
+}
+
+export interface UserMemory {
+  id: string;
+  user_id: string;
+  recipe_id?: string | null;
+  note: string;
+  created_at?: string;
 }
 
 export interface Favorite {

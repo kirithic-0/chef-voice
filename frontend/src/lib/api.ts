@@ -1,4 +1,13 @@
-import { Recipe, UserProfile, Favorite, CookingHistoryEntry, AppSession, AuthUser } from '../types';
+import {
+  Recipe,
+  UserProfile,
+  Favorite,
+  CookingHistoryEntry,
+  AppSession,
+  AuthUser,
+  ShoppingListItem,
+  UserMemory,
+} from '../types';
 
 // Base URL of the FastAPI backend. Override with VITE_API_BASE_URL when deploying.
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
@@ -273,4 +282,78 @@ export async function saveConversation(title: string, messages: any[]) {
     body: JSON.stringify({ title, messages }),
   });
   return parse(response, 'Failed to save conversation');
+}
+
+// --------------------------------------------------------------------------- //
+// Shopping list (also updated by the voice agent's add-to-list tool)
+// --------------------------------------------------------------------------- //
+
+export async function fetchShoppingList(): Promise<ShoppingListItem[]> {
+  const response = await fetch(`${API_BASE_URL}/shopping-list`, { headers: authHeaders() });
+  return parse(response, 'Failed to fetch shopping list');
+}
+
+export async function addShoppingListItem(item: {
+  name: string;
+  quantity?: string;
+  unit?: string;
+}): Promise<ShoppingListItem> {
+  const response = await fetch(`${API_BASE_URL}/shopping-list`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify(item),
+  });
+  return parse(response, 'Failed to add shopping list item');
+}
+
+export async function patchShoppingListItem(
+  id: string,
+  patch: Record<string, unknown>,
+): Promise<ShoppingListItem> {
+  const response = await fetch(`${API_BASE_URL}/shopping-list/${id}`, {
+    method: 'PATCH',
+    headers: authHeaders(),
+    body: JSON.stringify(patch),
+  });
+  return parse(response, 'Failed to update shopping list item');
+}
+
+export async function deleteShoppingListItem(id: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/shopping-list/${id}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  });
+  await parse(response, 'Failed to delete shopping list item');
+}
+
+// --------------------------------------------------------------------------- //
+// Memories (also written by the voice agent's save-note tool)
+// --------------------------------------------------------------------------- //
+
+export async function fetchMemories(recipeId?: string): Promise<UserMemory[]> {
+  const qs = recipeId ? `?recipe_id=${encodeURIComponent(recipeId)}` : '';
+  const response = await fetch(`${API_BASE_URL}/memories${qs}`, { headers: authHeaders() });
+  return parse(response, 'Failed to fetch memories');
+}
+
+export async function createMemory(note: string, recipeId?: string): Promise<UserMemory> {
+  const response = await fetch(`${API_BASE_URL}/memories`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ note, recipe_id: recipeId }),
+  });
+  return parse(response, 'Failed to save memory');
+}
+
+// --------------------------------------------------------------------------- //
+// Recipe import from a URL (admin / agent tool)
+// --------------------------------------------------------------------------- //
+
+export async function importRecipeFromUrl(url: string) {
+  const response = await fetch(`${API_BASE_URL}/recipes/import`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ url }),
+  });
+  return parse(response, 'Failed to import recipe');
 }

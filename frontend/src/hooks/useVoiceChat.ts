@@ -9,7 +9,7 @@ export function useVoiceChat() {
   const [isAiThinking, setIsAiThinking] = useState(false);
   const [status, setStatus] = useState<'idle' | 'connecting' | 'recording' | 'isAiThinking' | 'isAiSpeaking'>('idle');
   const [interimTranscript, setInterimTranscript] = useState('');
-  const [ttsMode, setTtsMode] = useState<'web_speech' | 'elevenlabs'>('web_speech');
+  const [ttsMode, setTtsMode] = useState<'web_speech'>('web_speech');
   const [latestAction, setLatestAction] = useState<VoiceAction | null>(null);
   
   // Real Audio Analyser state
@@ -31,7 +31,7 @@ export function useVoiceChat() {
 
   const isAiThinkingRef = useRef(false);
   const isAiSpeakingRef = useRef(false);
-  const ttsModeRef = useRef<'web_speech' | 'elevenlabs'>('web_speech');
+  const ttsModeRef = useRef<'web_speech'>('web_speech');
 
   useEffect(() => {
     isAiThinkingRef.current = isAiThinking;
@@ -273,37 +273,17 @@ export function useVoiceChat() {
             { id: `ai-${Date.now()}`, role: 'ai', text: data.text },
           ]);
           setIsAiThinking(false);
-
-          if (ttsModeRef.current === 'web_speech') {
-            speakWebSpeech(data.text);
-          }
+          speakWebSpeech(data.text);
+        } else if (data.type === 'ai_text_partial') {
+          // Progressive tokens streamed from the NVIDIA agent; keep the
+          // thinking indicator up until the final ai_text arrives.
+          setIsAiThinking(true);
         } else if (data.type === 'ai_audio_chunk') {
-          // Received raw PCM chunk from ElevenLabs
-          if (ttsModeRef.current === 'elevenlabs') {
-            setIsAiSpeaking(true);
-            setStatus('isAiSpeaking');
-            const int16Data = base64ToInt16Array(data.audio);
-            const float32Data = int16ToFloat32(int16Data);
-            
-            audioQueueRef.current.push(float32Data);
-            if (!isPlayingAudioRef.current) {
-              playNextChunk();
-            }
-          }
+          // Ignored: text-to-speech is handled client-side by the Web Speech API.
         } else if (data.type === 'ai_audio_end') {
-          if (ttsModeRef.current === 'elevenlabs') {
-            hasReceivedAudioEndRef.current = true;
-            // If nothing is playing, reset state back to recording
-            if (!isPlayingAudioRef.current && audioQueueRef.current.length === 0) {
-              setIsAiSpeaking(false);
-              setStatus('recording');
-              hasReceivedAudioEndRef.current = false;
-            }
-          }
+          // no-op in Web Speech mode
         } else if (data.type === 'ai_audio_none') {
-          if (ttsModeRef.current === 'elevenlabs') {
-            setStatus('recording');
-          }
+          // Client Web Speech handles playback; recording resumes on utterance end.
         } else if (data.type === 'error') {
           console.error('Server error:', data.message);
           setMessages((prev) => [
