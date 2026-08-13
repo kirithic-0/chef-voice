@@ -4,6 +4,7 @@ NVIDIA NIM tool-calling agent loop for ChefVoice.
 from __future__ import annotations
 
 import json
+import os
 import time
 from typing import Any, Awaitable, Callable, Optional
 
@@ -12,12 +13,21 @@ import httpx
 from tools import TOOL_DEFINITIONS, ToolContext, build_system_prompt, execute_tool
 
 NVIDIA_CHAT_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
-# Mistral NeMo family on NIM (classic NeMo-12B is not enabled on many keys).
-DEFAULT_MODEL = "mistralai/mistral-nemotron"
-FALLBACK_MODEL = "mistralai/mistral-nemotron"
+# Tool-calling models on NVIDIA NIM. Override the primary via the NVIDIA_MODEL
+# env var; the fallback is a smaller/faster model used on timeout or 5xx.
+DEFAULT_MODEL = "meta/llama-3.1-8b-instruct"
+FALLBACK_MODEL = "meta/llama-3.1-70b-instruct"
 MAX_TOOL_ROUNDS = 4
 TOOL_CALL_TIMEOUT = 25.0
 STREAM_TIMEOUT = 45.0
+
+# Verbose agent tracing is off by default; enable with CHEFVOICE_DEBUG=1.
+DEBUG = os.getenv("CHEFVOICE_DEBUG", "").lower() in ("1", "true", "yes")
+
+
+def _log(*args) -> None:
+    if DEBUG:
+        print(*args)
 
 
 SendJson = Callable[[dict], Awaitable[None]]
@@ -88,7 +98,7 @@ async def _nvidia_chat_with_fallback(
     except httpx.TimeoutException:
         if active == FALLBACK_MODEL:
             raise
-        print(f"[agent] timeout on {active}, falling back to {FALLBACK_MODEL}")
+        _log(f"[agent] timeout on {active}, falling back to {FALLBACK_MODEL}")
         active = FALLBACK_MODEL
         resp = await _nvidia_chat(
             http_client,
@@ -103,7 +113,7 @@ async def _nvidia_chat_with_fallback(
         )
 
     if resp.status_code >= 500 and active != FALLBACK_MODEL:
-        print(f"[agent] {active} returned {resp.status_code}, falling back to {FALLBACK_MODEL}")
+        _log(f"[agent] {active} returned {resp.status_code}, falling back to {FALLBACK_MODEL}")
         active = FALLBACK_MODEL
         resp = await _nvidia_chat(
             http_client,
@@ -209,7 +219,7 @@ async def run_agent_turn(
     final_text = ""
 
     for round_idx in range(MAX_TOOL_ROUNDS):
-        print(f"[agent] round={round_idx} model={active_model}")
+        _log(f"[agent] round={round_idx} model={active_model}")
         resp, active_model = await _nvidia_chat_with_fallback(
             ctx.http_client,
             ctx.nvidia_api_key,
@@ -221,7 +231,7 @@ async def run_agent_turn(
 
         if resp.status_code == 400 and active_model != FALLBACK_MODEL:
             # Some cloud models reject tools; fall back once
-            print(f"[agent] model {active_model} rejected tools ({resp.text[:300]}), trying fallback")
+            _log(f"[agent] model {active_model} rejected tools ({resp.text[:300]}), trying fallback")
             active_model = FALLBACK_MODEL
             resp, active_model = await _nvidia_chat_with_fallback(
                 ctx.http_client,
@@ -251,7 +261,7 @@ async def run_agent_turn(
                 name = fn.get("name") or ""
                 args = _parse_tool_args(fn.get("arguments"))
                 call_id = call.get("id") or f"call_{name}"
-                print(f"[agent] tool={name} args={args}")
+                _log(f"[agent] tool={name} args={args}")
                 result = await execute_tool(name, args, ctx)
                 # Emit UI actions produced by this tool so far
                 while ctx.ui_actions:
@@ -283,7 +293,7 @@ async def run_agent_turn(
                 send_json,
             )
         except Exception as e:
-            print(f"[agent] stream failed, falling back to non-stream: {type(e).__name__}: {e!r}")
+            _log(f"[agent] stream failed, falling back to non-stream: {type(e).__name__}: {e!r}")
             resp = await _nvidia_chat(
                 ctx.http_client,
                 ctx.nvidia_api_key,
@@ -302,5 +312,5 @@ async def run_agent_turn(
         await send_json({"type": "ai_action", "action": action})
 
     elapsed = time.time() - t0
-    print(f"[agent] turn complete in {elapsed:.2f}s text_len={len(final_text)}")
+    _log(f"[agent] turn complete in {elapsed:.2f}s text_len={len(final_text)}")
     return final_text

@@ -489,8 +489,6 @@ async def websocket_chat(client_ws: WebSocket):
                 })
         except Exception as e:
             print(f"Error processing AI response: {type(e).__name__}: {e!r}")
-            import traceback
-            traceback.print_exc()
             await client_ws.send_json({
                 "type": "error",
                 "message": "An unexpected error occurred. Please try speaking again."
@@ -529,7 +527,6 @@ async def websocket_chat(client_ws: WebSocket):
                                 # Sync state from client
                                 updated = data.get("state", {})
                                 cooking_state.update(updated)
-                                print(f"State sync received: {cooking_state}")
                             elif data.get("type") == "user_text":
                                 user_text = data.get("text", "").strip()
                                 if user_text:
