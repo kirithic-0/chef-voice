@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { fetchConversations } from '../lib/supabase';
+import { fetchConversations } from '../lib/api';
 
 interface HistoryPanelProps {
   isOpen: boolean;

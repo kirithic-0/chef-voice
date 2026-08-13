@@ -1,338 +1,301 @@
 import os
 import json
-import base64
 import asyncio
 import time
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.concurrency import run_in_threadpool
+from pydantic import BaseModel
 import httpx
 import websockets
+import jwt
 from dotenv import load_dotenv
 from sentence_transformers import SentenceTransformer
 
+import database as db
+import auth
+
 load_dotenv()
 
-# Retrieve API keys and configurations
+# Third-party API keys for the real-time voice pipeline (STT / LLM / TTS).
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 
-app = FastAPI(title="VoiceChat Backend")
+# Comma-separated list of allowed frontend origins (defaults to the Vite dev server).
+FRONTEND_ORIGINS = [
+    o.strip()
+    for o in os.getenv(
+        "FRONTEND_ORIGIN",
+        "http://localhost:5173,http://127.0.0.1:5173",
+    ).split(",")
+    if o.strip()
+]
 
-# Enable CORS for frontend requests
+app = FastAPI(title="ChefVoice Backend")
+
+# CORS: we authenticate with bearer tokens (not cookies), so credentials are off
+# and origins are restricted to the known frontend hosts.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=FRONTEND_ORIGINS,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Initialize local embedding model for semantic search
+# Initialize the local embedding model used for semantic recipe search (RAG).
 print("Loading sentence-transformers/all-MiniLM-L6-v2 model...")
 embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
-async def get_user_from_token(token: str) -> dict:
-    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
-        raise HTTPException(status_code=500, detail="Supabase environment variables are not configured.")
-    url = f"{SUPABASE_URL}/auth/v1/user"
-    headers = {
-        "apikey": SUPABASE_SERVICE_KEY,
-        "Authorization": f"Bearer {token}"
-    }
-    async with httpx.AsyncClient() as client:
-        try:
-            resp = await client.get(url, headers=headers)
-            if resp.status_code == 200:
-                return resp.json()
-            else:
-                raise HTTPException(status_code=401, detail="Invalid token")
-        except httpx.HTTPStatusError as hse:
-            raise HTTPException(status_code=hse.response.status_code, detail="Authentication failed")
-        except Exception as e:
-            print(f"Auth error: {e}")
-            raise HTTPException(status_code=401, detail="Authentication failed")
 
-def get_token_from_header(request: Request) -> str:
+# Create the SQLite database and schema on startup.
+db.init_db()
+
+
+# --------------------------------------------------------------------------- #
+# Request models
+# --------------------------------------------------------------------------- #
+
+class Credentials(BaseModel):
+    username: str
+    password: str
+
+
+class ProfileUpdate(BaseModel):
+    allergies: list[str] = []
+    dietary_preferences: list[str] = []
+
+
+class AdminUpdate(BaseModel):
+    is_admin: bool
+
+
+class FavoriteCreate(BaseModel):
+    recipe_id: str
+
+
+class HistoryCreate(BaseModel):
+    recipe_id: str
+    duration_minutes: int | None = None
+    rating: int | None = None
+
+
+class ConversationCreate(BaseModel):
+    title: str = ""
+    messages: list[dict] = []
+
+
+class RecipeCreate(BaseModel):
+    title: str
+    cuisine: str
+    time: int
+    difficulty: str
+    servings: int
+    dietary: list[str] = []
+    image_url: str | None = None
+    ingredients: list[dict]
+    steps: list[dict]
+
+
+# --------------------------------------------------------------------------- #
+# Auth helpers
+# --------------------------------------------------------------------------- #
+
+def get_current_user(request: Request) -> dict:
+    """FastAPI dependency: validate the bearer token and return {id, username}."""
     auth_header = request.headers.get("Authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
-    return auth_header.split(" ")[1]
+    token = auth_header.split(" ", 1)[1]
+    try:
+        payload = auth.decode_token(token)
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid token payload")
+    return {"id": user_id, "username": payload.get("username")}
 
-@app.get("/conversations")
-async def get_conversations(request: Request):
-    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
-        raise HTTPException(status_code=500, detail="Supabase environment variables are not configured.")
-    
-    token = get_token_from_header(request)
-    await get_user_from_token(token)
-    
-    url = f"{SUPABASE_URL}/rest/v1/conversations"
-    headers = {
-        "apikey": SUPABASE_SERVICE_KEY,
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
-    params = {
-        "select": "*",
-        "order": "created_at.desc",
-        "limit": "10"
-    }
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(url, headers=headers, params=params)
-            response.raise_for_status()
-            return response.json()
-        except Exception as e:
-            print(f"Error fetching conversations: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/conversations")
-async def post_conversation(request: Request, data: dict):
-    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
-        raise HTTPException(status_code=500, detail="Supabase environment variables are not configured.")
-    
-    token = get_token_from_header(request)
-    user = await get_user_from_token(token)
-    user_id = user["id"]
-    
-    # Inject user_id to respect RLS constraint
-    data["user_id"] = user_id
-    
-    url = f"{SUPABASE_URL}/rest/v1/conversations"
-    headers = {
-        "apikey": SUPABASE_SERVICE_KEY,
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-        "Prefer": "return=representation"
-    }
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.post(url, headers=headers, json=data)
-            response.raise_for_status()
-            return response.json()
-        except Exception as e:
-            print(f"Error saving conversation: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+def require_admin(user: dict) -> None:
+    if not db.is_admin(user["id"]):
+        raise HTTPException(status_code=403, detail="Forbidden: Admin access required.")
+
+
+# --------------------------------------------------------------------------- #
+# Authentication endpoints
+# --------------------------------------------------------------------------- #
+
+@app.post("/auth/signup")
+def signup(creds: Credentials):
+    username = creds.username.strip().lower()
+    if not username or not creds.password:
+        raise HTTPException(status_code=400, detail="Username and password are required.")
+    if len(creds.password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters.")
+    if db.get_user_by_username(username):
+        raise HTTPException(status_code=409, detail="That username is already taken.")
+
+    user = db.create_user(username, auth.hash_password(creds.password))
+    token = auth.create_token(user["id"], user["username"])
+    return {"token": token, "user": user}
+
+
+@app.post("/auth/login")
+def login(creds: Credentials):
+    username = creds.username.strip().lower()
+    row = db.get_user_by_username(username)
+    if not row or not auth.verify_password(creds.password, row["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid username or password.")
+    user = {"id": row["id"], "username": row["username"]}
+    token = auth.create_token(user["id"], user["username"])
+    return {"token": token, "user": user}
+
+
+@app.get("/auth/user")
+def get_authenticated_user(user: dict = Depends(get_current_user)):
+    return user
+
+
+# --------------------------------------------------------------------------- #
+# Recipe endpoints
+# --------------------------------------------------------------------------- #
 
 @app.get("/recipes")
-async def get_recipes(request: Request):
-    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
-        raise HTTPException(status_code=500, detail="Supabase environment variables are not configured.")
-    
-    token = get_token_from_header(request)
-    await get_user_from_token(token)
-    
-    url = f"{SUPABASE_URL}/rest/v1/recipes"
-    headers = {
-        "apikey": SUPABASE_SERVICE_KEY,
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
-    params = {
-        "select": "*",
-        "order": "title.asc"
-    }
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(url, headers=headers, params=params)
-            response.raise_for_status()
-            return response.json()
-        except Exception as e:
-            print(f"Error fetching recipes: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+def get_recipes(user: dict = Depends(get_current_user)):
+    return db.list_recipes()
+
 
 @app.get("/recipes/search")
-async def search_recipes(query: str, request: Request):
-    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
-        raise HTTPException(status_code=500, detail="Supabase environment variables are not configured.")
+async def search_recipes(query: str, user: dict = Depends(get_current_user)):
     if not query:
         return []
-    
-    token = get_token_from_header(request)
-    await get_user_from_token(token)
-    
-    try:
-        # Generate embedding for the search query in a separate thread to prevent blocking the event loop
-        query_embedding_arr = await run_in_threadpool(embedding_model.encode, query)
-        query_embedding = query_embedding_arr.tolist()
-        
-        # Call Supabase match_recipes RPC
-        url = f"{SUPABASE_URL}/rest/v1/rpc/match_recipes"
-        headers = {
-            "apikey": SUPABASE_SERVICE_KEY,
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "query_embedding": query_embedding,
-            "match_threshold": 0.0,
-            "match_count": 6
-        }
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(url, headers=headers, json=payload)
-            resp.raise_for_status()
-            return resp.json()
-    except Exception as e:
-        print(f"Error searching recipes: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    query_embedding = await run_in_threadpool(embedding_model.encode, query)
+    return db.search_recipes(query_embedding.tolist(), match_count=6)
+
 
 @app.get("/recipes/{recipe_id}")
-async def get_recipe(recipe_id: str, request: Request):
-    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
-        raise HTTPException(status_code=500, detail="Supabase environment variables are not configured.")
-    
-    token = get_token_from_header(request)
-    await get_user_from_token(token)
-    
-    url = f"{SUPABASE_URL}/rest/v1/recipes"
-    headers = {
-        "apikey": SUPABASE_SERVICE_KEY,
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
-    params = {
-        "select": "*",
-        "id": f"eq.{recipe_id}"
-    }
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(url, headers=headers, params=params)
-            response.raise_for_status()
-            data = response.json()
-            if not data:
-                raise HTTPException(status_code=404, detail="Recipe not found")
-            return data[0]
-        except HTTPException as he:
-            raise he
-        except Exception as e:
-            print(f"Error fetching recipe {recipe_id}: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+def get_single_recipe(recipe_id: str, user: dict = Depends(get_current_user)):
+    recipe = db.get_recipe(recipe_id)
+    if not recipe:
+        raise HTTPException(status_code=404, detail="Recipe not found")
+    return recipe
 
-async def check_is_admin(user_id: str, token: str) -> bool:
-    url = f"{SUPABASE_URL}/rest/v1/profiles"
-    headers = {
-        "apikey": SUPABASE_SERVICE_KEY,
-        "Authorization": f"Bearer {token}"
-    }
-    params = {
-        "select": "is_admin",
-        "id": f"eq.{user_id}"
-    }
-    async with httpx.AsyncClient() as client:
-        try:
-            resp = await client.get(url, headers=headers, params=params)
-            if resp.status_code == 200:
-                profiles = resp.json()
-                if profiles and len(profiles) > 0:
-                    return bool(profiles[0].get("is_admin", False))
-            return False
-        except Exception as e:
-            print(f"Error checking admin status: {e}")
-            return False
 
 @app.post("/recipes")
-async def create_recipe(request: Request, recipe_data: dict):
-    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
-        raise HTTPException(status_code=500, detail="Supabase environment variables are not configured.")
-    
-    token = get_token_from_header(request)
-    user = await get_user_from_token(token)
-    user_id = user["id"]
-    
-    is_admin = await check_is_admin(user_id, token)
-    if not is_admin:
-        raise HTTPException(status_code=403, detail="Forbidden: Admin access required.")
-    
-    required_fields = ["title", "cuisine", "time", "difficulty", "servings", "ingredients", "steps"]
-    for field in required_fields:
-        if field not in recipe_data:
-            raise HTTPException(status_code=400, detail=f"Missing required field: {field}")
-            
-    ingredients = recipe_data.get("ingredients", [])
-    ingredients_list = []
-    for ing in ingredients:
-        name = ing.get("name", "")
-        amount = ing.get("amount", "")
-        unit = ing.get("unit", "")
-        ingredients_list.append(f"{amount} {unit} {name}".strip())
-    ingredients_str = ", ".join(ingredients_list)
-    
-    text_to_encode = f"Title: {recipe_data['title']}. Cuisine: {recipe_data['cuisine']}. Difficulty: {recipe_data['difficulty']}. Ingredients: {ingredients_str}."
-    
-    try:
-        query_embedding_arr = await run_in_threadpool(embedding_model.encode, text_to_encode)
-        recipe_data["embedding"] = query_embedding_arr.tolist()
-        
-        url = f"{SUPABASE_URL}/rest/v1/recipes"
-        headers = {
-            "apikey": SUPABASE_SERVICE_KEY,
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-            "Prefer": "return=representation"
-        }
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(url, headers=headers, json=recipe_data)
-            resp.raise_for_status()
-            return resp.json()[0]
-    except Exception as e:
-        print(f"Error creating recipe: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+async def create_recipe(recipe: RecipeCreate, user: dict = Depends(get_current_user)):
+    require_admin(user)
+    recipe_dict = recipe.model_dump()
+    text_to_encode = db.build_recipe_text(recipe_dict)
+    embedding = await run_in_threadpool(embedding_model.encode, text_to_encode)
+    return db.create_recipe(recipe_dict, embedding.tolist())
+
 
 @app.delete("/recipes/{recipe_id}")
-async def delete_recipe(recipe_id: str, request: Request):
-    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
-        raise HTTPException(status_code=500, detail="Supabase environment variables are not configured.")
-        
-    token = get_token_from_header(request)
-    user = await get_user_from_token(token)
-    user_id = user["id"]
-    
-    is_admin = await check_is_admin(user_id, token)
-    if not is_admin:
-        raise HTTPException(status_code=403, detail="Forbidden: Admin access required.")
-        
-    try:
-        url = f"{SUPABASE_URL}/rest/v1/recipes"
-        headers = {
-            "apikey": SUPABASE_SERVICE_KEY,
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json"
-        }
-        params = {
-            "id": f"eq.{recipe_id}"
-        }
-        async with httpx.AsyncClient() as client:
-            resp = await client.delete(url, headers=headers, params=params)
-            resp.raise_for_status()
-            return {"status": "success", "message": f"Recipe {recipe_id} deleted successfully."}
-    except Exception as e:
-        print(f"Error deleting recipe: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+def remove_recipe(recipe_id: str, user: dict = Depends(get_current_user)):
+    require_admin(user)
+    db.delete_recipe(recipe_id)
+    return {"status": "success", "message": f"Recipe {recipe_id} deleted successfully."}
+
+
+# --------------------------------------------------------------------------- #
+# Profile endpoints
+# --------------------------------------------------------------------------- #
+
+@app.get("/profile")
+def get_profile(user: dict = Depends(get_current_user)):
+    return db.get_or_create_profile(user["id"])
+
+
+@app.put("/profile")
+def put_profile(update: ProfileUpdate, user: dict = Depends(get_current_user)):
+    return db.update_profile(user["id"], update.allergies, update.dietary_preferences)
+
+
+@app.put("/profile/admin")
+def put_admin(update: AdminUpdate, user: dict = Depends(get_current_user)):
+    return db.set_admin(user["id"], update.is_admin)
+
+
+# --------------------------------------------------------------------------- #
+# Favorites endpoints
+# --------------------------------------------------------------------------- #
+
+@app.get("/favorites")
+def get_favorites(user: dict = Depends(get_current_user)):
+    return db.list_favorites(user["id"])
+
+
+@app.post("/favorites")
+def post_favorite(fav: FavoriteCreate, user: dict = Depends(get_current_user)):
+    return db.add_favorite(user["id"], fav.recipe_id)
+
+
+@app.delete("/favorites/{recipe_id}")
+def delete_favorite(recipe_id: str, user: dict = Depends(get_current_user)):
+    db.remove_favorite(user["id"], recipe_id)
+    return {"status": "success"}
+
+
+# --------------------------------------------------------------------------- #
+# Cooking history endpoints
+# --------------------------------------------------------------------------- #
+
+@app.get("/history")
+def get_history(user: dict = Depends(get_current_user)):
+    return db.list_cooking_history(user["id"])
+
+
+@app.post("/history")
+def post_history(entry: HistoryCreate, user: dict = Depends(get_current_user)):
+    return db.add_cooking_history(
+        user["id"], entry.recipe_id, entry.duration_minutes, entry.rating
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Conversation endpoints (voice-session transcripts)
+# --------------------------------------------------------------------------- #
+
+@app.get("/conversations")
+def get_conversations(user: dict = Depends(get_current_user)):
+    return db.list_conversations(user["id"])
+
+
+@app.post("/conversations")
+def post_conversation(conv: ConversationCreate, user: dict = Depends(get_current_user)):
+    return db.add_conversation(user["id"], conv.title, conv.messages)
+
+
+# --------------------------------------------------------------------------- #
+# Real-time voice WebSocket (Deepgram STT -> Groq LLM -> ElevenLabs TTS)
+# --------------------------------------------------------------------------- #
 
 @app.websocket("/ws/chat")
 async def websocket_chat(client_ws: WebSocket):
     await client_ws.accept()
     print("WebSocket client connected.")
-    
+
     token = client_ws.query_params.get("token")
     if not token:
         print("WebSocket authentication failed: missing token.")
         await client_ws.send_json({"type": "error", "message": "Missing authentication token."})
         await client_ws.close()
         return
-        
+
     try:
-        user = await get_user_from_token(token)
-        print(f"WebSocket client authenticated: user {user.get('id')}")
-    except Exception as e:
+        payload = auth.decode_token(token)
+        user_id = payload.get("sub")
+        if not user_id:
+            raise jwt.InvalidTokenError("Missing subject")
+        print(f"WebSocket client authenticated: user {user_id}")
+    except jwt.InvalidTokenError as e:
         print(f"WebSocket authentication failed: {e}")
         await client_ws.send_json({"type": "error", "message": "Invalid authentication token."})
         await client_ws.close()
         return
-    
+
     if not DEEPGRAM_API_KEY or not GROQ_API_KEY or not ELEVENLABS_API_KEY:
         print("Missing required API keys in environment.")
         await client_ws.send_json({"type": "error", "message": "Missing API keys on server."})
@@ -345,7 +308,7 @@ async def websocket_chat(client_ws: WebSocket):
         "&punctuate=true&endpointing=1000"
     )
     dg_headers = {"Authorization": f"Token {DEEPGRAM_API_KEY}"}
-    
+
     # Session state
     cooking_state = {
         "screen": "home",
@@ -356,16 +319,16 @@ async def websocket_chat(client_ws: WebSocket):
         "allergies": [],
         "dietary_preferences": []
     }
-    
+
     history = []
-    
+
     # Initialize long-running HTTP Client
     http_client = httpx.AsyncClient(timeout=30.0)
-    
+
     async def stream_elevenlabs_audio(text: str):
         voice_id = "EXAVITQu4vr4xnSDxMaL"  # default voice
         el_url = f"wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream-input?model_id=eleven_monolingual_v1&output_format=pcm_16000"
-        
+
         print("Connecting to ElevenLabs WebSocket for streaming TTS...")
         try:
             async with websockets.connect(el_url) as el_ws:
@@ -379,18 +342,18 @@ async def websocket_chat(client_ws: WebSocket):
                     "xi_api_key": ELEVENLABS_API_KEY
                 }
                 await el_ws.send(json.dumps(config_msg))
-                
+
                 # 2. Send Text
                 input_msg = {
                     "text": f"{text} ",
                     "try_trigger_generation": True
                 }
                 await el_ws.send(json.dumps(input_msg))
-                
+
                 # 3. Send EOS
                 eos_msg = {"text": ""}
                 await el_ws.send(json.dumps(eos_msg))
-                
+
                 # 4. Stream audio back
                 while True:
                     resp = await el_ws.recv()
@@ -403,7 +366,7 @@ async def websocket_chat(client_ws: WebSocket):
                         })
                     if data.get("isFinal") or not audio_b64:
                         break
-                
+
                 # Send completion signal
                 await client_ws.send_json({"type": "ai_audio_end"})
                 print("ElevenLabs TTS streaming completed.")
@@ -422,7 +385,7 @@ async def websocket_chat(client_ws: WebSocket):
             "text": combined_transcript
         })
         history.append({"role": "user", "content": combined_transcript})
-        
+
         # Construct dynamic cooking context system prompt
         recipe = cooking_state.get("recipe")
         current_step_idx = cooking_state.get("current_step", 0)
@@ -430,7 +393,7 @@ async def websocket_chat(client_ws: WebSocket):
         timers = cooking_state.get("timers", [])
         allergies = cooking_state.get("allergies", [])
         dietary_prefs = cooking_state.get("dietary_preferences", [])
-        
+
         recipe_context = "None"
         step_context = "None"
         if recipe:
@@ -448,11 +411,11 @@ async def websocket_chat(client_ws: WebSocket):
                     step_context += f" (SAFETY ALERT: {curr_step.get('safety_alert')})"
                 if curr_step.get('timer_duration'):
                     step_context += f" (Suggested Timer: {curr_step.get('timer_duration')} seconds)"
-        
+
         timers_context = json.dumps(timers)
         allergies_str = ", ".join(allergies) if allergies else "None"
         dietary_str = ", ".join(dietary_prefs) if dietary_prefs else "None"
-        
+
         system_prompt = (
             "You are ChefVoice, a hands-free kitchen voice assistant.\n"
             "Your goal is to guide the user step-by-step through recipes, manage timers, suggest substitutions, and answer cooking questions.\n\n"
@@ -492,7 +455,7 @@ async def websocket_chat(client_ws: WebSocket):
             "- If the user asks 'how much time is left?', check the active running timers context and answer verbally with action type 'none'.\n"
             "- If the user asks for a substitution (e.g. 'what can I use instead of cream?'), explain it verbally with action type 'none'.\n"
         )
-        
+
         try:
             groq_url = "https://api.groq.com/openai/v1/chat/completions"
             groq_headers = {
@@ -503,34 +466,34 @@ async def websocket_chat(client_ws: WebSocket):
                 "model": "llama-3.3-70b-versatile",
                 "messages": [
                     {"role": "system", "content": system_prompt},
-                    *history[-6:] # Keep context short for speed
+                    *history[-6:]  # Keep context short for speed
                 ],
                 "response_format": {"type": "json_object"}
             }
             groq_resp = await http_client.post(groq_url, headers=groq_headers, json=groq_body)
             groq_resp.raise_for_status()
             groq_data = groq_resp.json()
-            
+
             raw_reply = groq_data["choices"][0]["message"]["content"].strip()
             print(f"Groq Raw JSON: {raw_reply}")
-            
+
             reply_json = json.loads(raw_reply)
             ai_reply = reply_json.get("text", "")
             action_data = reply_json.get("action", {"type": "none", "params": {}})
-            
+
             # Send action to client first for fast UI updates
             await client_ws.send_json({
                 "type": "ai_action",
                 "action": action_data
             })
-            
+
             # Send AI text to client
             await client_ws.send_json({
                 "type": "ai_text",
                 "text": ai_reply
             })
             history.append({"role": "assistant", "content": ai_reply})
-            
+
             # Process Audio Synthesis
             if cooking_state.get("tts_mode") == "elevenlabs" and ai_reply:
                 await stream_elevenlabs_audio(ai_reply)
@@ -539,7 +502,7 @@ async def websocket_chat(client_ws: WebSocket):
                 await client_ws.send_json({
                     "type": "ai_audio_none"
                 })
-                
+
         except httpx.HTTPStatusError as hse:
             if hse.response.status_code == 429:
                 print("Groq API 429 rate limit hit.")
@@ -579,7 +542,7 @@ async def websocket_chat(client_ws: WebSocket):
     try:
         async with websockets.connect(dg_url, additional_headers=dg_headers) as dg_ws:
             print("Connected to Deepgram streaming API.")
-            
+
             # Read from client and forward to Deepgram or process control frames / text messages
             async def client_to_dg():
                 try:
@@ -607,11 +570,11 @@ async def websocket_chat(client_ws: WebSocket):
                     print(f"Error in client_to_dg: {e}")
                 finally:
                     await dg_ws.close()
-            
+
             # Read from Deepgram and process transcripts
             user_turn_transcript = []
             last_speech_time = [time.time()]
-            
+
             async def dg_to_client():
                 async def trigger_turn():
                     combined_transcript = " ".join(user_turn_transcript).strip()
@@ -627,7 +590,7 @@ async def websocket_chat(client_ws: WebSocket):
                         alternatives = channel.get("alternatives", [])
                         is_final = data.get("is_final", False)
                         speech_final = data.get("speech_final", False)
-                        
+
                         if alternatives:
                             transcript = alternatives[0].get("transcript", "").strip()
                             if transcript:
@@ -652,7 +615,7 @@ async def websocket_chat(client_ws: WebSocket):
                             await trigger_turn()
                 except Exception as e:
                     print(f"Error in dg_to_client: {e}")
- 
+
             # KeepAlive deepgram
             async def keep_alive_dg():
                 try:
@@ -663,7 +626,7 @@ async def websocket_chat(client_ws: WebSocket):
                     pass
                 except Exception as e:
                     print(f"Error in keep_alive_dg: {e}")
-            
+
             # Run tasks concurrently
             worker_task = asyncio.create_task(turn_worker())
             done, pending = await asyncio.wait(
@@ -677,7 +640,7 @@ async def websocket_chat(client_ws: WebSocket):
             )
             for task in pending:
                 task.cancel()
-            
+
     except WebSocketDisconnect:
         print("WebSocket disconnected.")
     except Exception as e:

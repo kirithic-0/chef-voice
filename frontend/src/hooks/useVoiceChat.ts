@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Message, VoiceAction } from '../types';
-import { supabase } from '../lib/supabase';
+import { getToken, getWsUrl } from '../lib/api';
 
 export function useVoiceChat() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -229,9 +229,8 @@ export function useVoiceChat() {
       setAnalyser(analyserNode);
 
       // 3. Open WebSocket connection with authenticated token
-      const { data: { session } } = await supabase.auth.getSession();
-      const token = session?.access_token || '';
-      const ws = new WebSocket(`ws://localhost:8000/ws/chat?token=${encodeURIComponent(token)}`);
+      const token = getToken() || '';
+      const ws = new WebSocket(getWsUrl(`/ws/chat?token=${encodeURIComponent(token)}`));
       wsRef.current = ws;
 
       ws.onopen = () => {

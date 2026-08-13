@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { supabase } from '../lib/supabase';
+import { login, signup } from '../lib/api';
 
 interface AuthProps {
   onAuthSuccess: () => void;
@@ -20,34 +20,23 @@ export default function Auth({ onAuthSuccess, onClose }: AuthProps) {
     setErrorMsg('');
     setSuccessMsg('');
 
-    // Transform simple username into a fake local email to comply with Supabase GoTrue schema
-    const email = `${username.trim().toLowerCase()}@chefvoice.local`;
+    const cleanUsername = username.trim().toLowerCase();
 
     try {
       if (isRegister) {
-        const { data, error } = await supabase.auth.signUp({
-          email,
-          password,
-        });
-        if (error) throw error;
-        
-        // Auto-confirm trigger will instantly confirm the user in the database
+        await signup(cleanUsername, password);
         setSuccessMsg('Account created successfully! Logging you in...');
         setTimeout(() => {
           onAuthSuccess();
           onClose?.();
-        }, 1500);
+        }, 1200);
       } else {
-        const { error } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
-        if (error) throw error;
+        await login(cleanUsername, password);
         setSuccessMsg('Logged in successfully!');
         setTimeout(() => {
           onAuthSuccess();
           onClose?.();
-        }, 1000);
+        }, 800);
       }
     } catch (err: any) {
       console.error('Auth error:', err);

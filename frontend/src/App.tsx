@@ -1,20 +1,21 @@
 import React, { useState, useEffect } from 'react';
 import { useVoiceChat } from './hooks/useVoiceChat';
 import { useCookingTimers } from './hooks/useCookingTimers';
-import { 
-  fetchRecipes, 
+import {
+  fetchRecipes,
   searchRecipes,
-  saveConversation, 
-  supabase, 
-  getUserProfile, 
-  getUserFavorites, 
-  addFavorite, 
+  getUserProfile,
+  getUserFavorites,
+  addFavorite,
   removeFavorite,
   getCookingHistory,
   addCookingHistory,
   createRecipe,
-  deleteRecipe
-} from './lib/supabase';
+  deleteRecipe,
+  getSession,
+  onAuthChange,
+  logout
+} from './lib/api';
 import RecipeCard from './components/RecipeCard';
 import Waveform from './components/Waveform';
 import TimerWidget from './components/TimerWidget';
@@ -22,8 +23,7 @@ import Auth from './components/Auth';
 import UserProfilePanel from './components/UserProfilePanel';
 import HistoryPanel from './components/HistoryPanel';
 import ChatArea from './components/ChatArea';
-import { Recipe, UserProfile, Favorite, CookingHistoryEntry } from './types';
-import { Session } from '@supabase/supabase-js';
+import { Recipe, UserProfile, Favorite, CookingHistoryEntry, AppSession } from './types';
 
 export default function App() {
   // Cooking state hooks
@@ -41,7 +41,7 @@ export default function App() {
   const [useSemanticSearch, setUseSemanticSearch] = useState(false);
 
   // Authentication & Profile states
-  const [session, setSession] = useState<Session | null>(null);
+  const [session, setSession] = useState<AppSession | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [favorites, setFavorites] = useState<Favorite[]>([]);
   
@@ -94,26 +94,25 @@ export default function App() {
     }
   };
 
-  // Fetch recipes from Supabase when authenticated
+  // Fetch recipes from the backend when authenticated
   useEffect(() => {
     if (session) {
       loadAllRecipes();
     }
   }, [session]);
 
-  // Monitor Supabase Auth state change
+  // Monitor local auth state change
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session: currentSession } }) => {
-      setSession(currentSession);
-      if (currentSession?.user) {
-        loadUserProfile(currentSession.user.id);
-      }
-    });
+    const currentSession = getSession();
+    setSession(currentSession);
+    if (currentSession?.user) {
+      loadUserProfile(currentSession.user.id);
+    }
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, currentSession) => {
-      setSession(currentSession);
-      if (currentSession?.user) {
-        loadUserProfile(currentSession.user.id);
+    const unsubscribe = onAuthChange((nextSession) => {
+      setSession(nextSession);
+      if (nextSession?.user) {
+        loadUserProfile(nextSession.user.id);
       } else {
         setUserProfile(null);
         setFavorites([]);
@@ -121,7 +120,7 @@ export default function App() {
       }
     });
 
-    return () => subscription.unsubscribe();
+    return unsubscribe;
   }, []);
 
   const loadUserProfile = async (uid: string) => {
@@ -137,8 +136,8 @@ export default function App() {
     }
   };
 
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
+  const handleLogout = () => {
+    logout();
     setCookingHistory([]);
   };
 
@@ -1415,10 +1414,9 @@ export default function App() {
         <Auth 
           onAuthSuccess={() => {
             setShowAuthModal(false);
-            supabase.auth.getUser().then(({ data: { user } }) => {
-              if (user) loadUserProfile(user.id);
-            });
-          }} 
+            const currentSession = getSession();
+            if (currentSession?.user) loadUserProfile(currentSession.user.id);
+          }}
           onClose={() => setShowAuthModal(false)} 
         />
       )}
@@ -1427,7 +1425,7 @@ export default function App() {
       {session && userProfile && (
         <UserProfilePanel
           userId={session.user.id}
-          userEmail={session.user.email || ''}
+          userEmail={session.user.username}
           recipes={recipes}
           isOpen={showProfilePanel}
           onClose={() => setShowProfilePanel(false)}

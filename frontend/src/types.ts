@@ -60,6 +60,18 @@ export interface UserProfile {
   is_admin?: boolean;
 }
 
+// Authenticated user identity returned by the backend auth endpoints.
+export interface AuthUser {
+  id: string;
+  username: string;
+}
+
+// Local session shape (replaces @supabase/supabase-js `Session`).
+export interface AppSession {
+  access_token: string;
+  user: AuthUser;
+}
+
 export interface Favorite {
   id: string;
   user_id: string;

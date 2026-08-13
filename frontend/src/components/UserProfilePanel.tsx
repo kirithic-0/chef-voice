@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { supabase, getUserProfile, updateUserProfile, getUserFavorites, getCookingHistory, updateAdminStatus } from '../lib/supabase';
+import { getUserProfile, getUserFavorites, getCookingHistory, updateAdminStatus } from '../lib/api';
 import { UserProfile, Favorite, CookingHistoryEntry, Recipe } from '../types';
 
 interface UserProfilePanelProps {
