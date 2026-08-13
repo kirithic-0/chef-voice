@@ -9,7 +9,7 @@ export function useVoiceChat() {
   const [isAiThinking, setIsAiThinking] = useState(false);
   const [status, setStatus] = useState<'idle' | 'connecting' | 'recording' | 'isAiThinking' | 'isAiSpeaking'>('idle');
   const [interimTranscript, setInterimTranscript] = useState('');
-  const [ttsMode, setTtsMode] = useState<'web_speech' | 'elevenlabs'>('web_speech');
+  const [ttsMode, setTtsMode] = useState<'web_speech'>('web_speech');
   const [latestAction, setLatestAction] = useState<VoiceAction | null>(null);
   
   // Real Audio Analyser state
@@ -23,7 +23,7 @@ export function useVoiceChat() {
   const reconnectAttemptsRef = useRef(0);
   const isStoppedManuallyRef = useRef(false);
 
-  // PCM Streaming Audio Player states
+  // PCM Streaming Audio Player states (kept for future local TTS; unused with Web Speech)
   const audioQueueRef = useRef<Float32Array[]>([]);
   const isPlayingAudioRef = useRef(false);
   const activeSourcesRef = useRef<AudioBufferSourceNode[]>([]);
@@ -31,7 +31,7 @@ export function useVoiceChat() {
 
   const isAiThinkingRef = useRef(false);
   const isAiSpeakingRef = useRef(false);
-  const ttsModeRef = useRef<'web_speech' | 'elevenlabs'>('web_speech');
+  const ttsModeRef = useRef<'web_speech'>('web_speech');
 
   useEffect(() => {
     isAiThinkingRef.current = isAiThinking;
@@ -110,7 +110,7 @@ export function useVoiceChat() {
   const interruptAi = () => {
     let interrupted = false;
 
-    // Stop ElevenLabs streaming audio sources
+    // Stop any queued PCM sources (unused in Web Speech mode)
     if (activeSourcesRef.current.length > 0) {
       activeSourcesRef.current.forEach(source => {
         try {
@@ -231,7 +231,8 @@ export function useVoiceChat() {
       // 3. Open WebSocket connection with authenticated token
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token || '';
-      const ws = new WebSocket(`ws://localhost:8000/ws/chat?token=${encodeURIComponent(token)}`);
+      const wsBase = import.meta.env.VITE_WS_URL || 'ws://localhost:8000';
+      const ws = new WebSocket(`${wsBase}/ws/chat?token=${encodeURIComponent(token)}`);
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -274,37 +275,16 @@ export function useVoiceChat() {
             { id: `ai-${Date.now()}`, role: 'ai', text: data.text },
           ]);
           setIsAiThinking(false);
-
-          if (ttsModeRef.current === 'web_speech') {
-            speakWebSpeech(data.text);
-          }
+          speakWebSpeech(data.text);
+        } else if (data.type === 'ai_text_partial') {
+          // Progressive tokens from NVIDIA — thinking stays true until final ai_text
+          setIsAiThinking(true);
         } else if (data.type === 'ai_audio_chunk') {
-          // Received raw PCM chunk from ElevenLabs
-          if (ttsModeRef.current === 'elevenlabs') {
-            setIsAiSpeaking(true);
-            setStatus('isAiSpeaking');
-            const int16Data = base64ToInt16Array(data.audio);
-            const float32Data = int16ToFloat32(int16Data);
-            
-            audioQueueRef.current.push(float32Data);
-            if (!isPlayingAudioRef.current) {
-              playNextChunk();
-            }
-          }
+          // Ignored: Web Speech only (no cloud/local neural TTS)
         } else if (data.type === 'ai_audio_end') {
-          if (ttsModeRef.current === 'elevenlabs') {
-            hasReceivedAudioEndRef.current = true;
-            // If nothing is playing, reset state back to recording
-            if (!isPlayingAudioRef.current && audioQueueRef.current.length === 0) {
-              setIsAiSpeaking(false);
-              setStatus('recording');
-              hasReceivedAudioEndRef.current = false;
-            }
-          }
+          // no-op for Web Speech mode
         } else if (data.type === 'ai_audio_none') {
-          if (ttsModeRef.current === 'elevenlabs') {
-            setStatus('recording');
-          }
+          // Client Web Speech handles playback; keep recording when synthesis ends via utterance.onend
         } else if (data.type === 'error') {
           console.error('Server error:', data.message);
           setMessages((prev) => [

@@ -99,12 +99,11 @@ export async function getUserProfile(userId: string): Promise<UserProfile> {
   return { ...data, email: null };
 }
 
-export async function updateUserProfile(userId: string, allergies: string[], dietaryPreferences: string[]) {
+export async function updateUserProfile(userId: string, dietaryPreferences: string[]) {
   const { data, error } = await supabase
     .from('profiles')
     .upsert({
       id: userId,
-      allergies,
       dietary_preferences: dietaryPreferences,
       created_at: new Date().toISOString()
     })
@@ -223,5 +222,79 @@ export async function deleteRecipe(id: string): Promise<void> {
     const errData = await response.json().catch(() => ({}));
     throw new Error(errData.detail || 'Failed to delete recipe');
   }
+}
+
+export async function fetchShoppingList() {
+  const headers = await getAuthHeaders();
+  const response = await fetch(`${API_BASE_URL}/shopping-list`, { headers });
+  if (!response.ok) throw new Error('Failed to fetch shopping list');
+  return response.json();
+}
+
+export async function addShoppingListItem(item: { name: string; quantity?: string; unit?: string }) {
+  const headers = await getAuthHeaders();
+  const response = await fetch(`${API_BASE_URL}/shopping-list`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(item),
+  });
+  if (!response.ok) {
+    const errData = await response.json().catch(() => ({}));
+    throw new Error(errData.detail || 'Failed to add shopping list item');
+  }
+  return response.json();
+}
+
+export async function patchShoppingListItem(id: string, patch: Record<string, unknown>) {
+  const headers = await getAuthHeaders();
+  const response = await fetch(`${API_BASE_URL}/shopping-list/${id}`, {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify(patch),
+  });
+  if (!response.ok) throw new Error('Failed to update shopping list item');
+  return response.json();
+}
+
+export async function deleteShoppingListItem(id: string) {
+  const headers = await getAuthHeaders();
+  const response = await fetch(`${API_BASE_URL}/shopping-list/${id}`, {
+    method: 'DELETE',
+    headers,
+  });
+  if (!response.ok) throw new Error('Failed to delete shopping list item');
+}
+
+export async function fetchMemories(recipeId?: string) {
+  const headers = await getAuthHeaders();
+  const qs = recipeId ? `?recipe_id=${encodeURIComponent(recipeId)}` : '';
+  const response = await fetch(`${API_BASE_URL}/memories${qs}`, { headers });
+  if (!response.ok) throw new Error('Failed to fetch memories');
+  return response.json();
+}
+
+export async function createMemory(note: string, recipeId?: string) {
+  const headers = await getAuthHeaders();
+  const response = await fetch(`${API_BASE_URL}/memories`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ note, recipe_id: recipeId }),
+  });
+  if (!response.ok) throw new Error('Failed to save memory');
+  return response.json();
+}
+
+export async function importRecipeFromUrl(url: string) {
+  const headers = await getAuthHeaders();
+  const response = await fetch(`${API_BASE_URL}/recipes/import`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ url }),
+  });
+  if (!response.ok) {
+    const errData = await response.json().catch(() => ({}));
+    throw new Error(errData.detail || 'Failed to import recipe');
+  }
+  return response.json();
 }
 

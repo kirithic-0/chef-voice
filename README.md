@@ -14,12 +14,11 @@ Navigate cooking steps hands-free, set smart timers, ask questions about ingredi
 | --- | --- |
 | **Hands-Free Navigation** | Navigate through recipe steps completely hands-free using natural language commands like "next step" or "what was the first step?". |
 | **Barge-In Capabilities** | The assistant is truly conversational. Interrupt the AI mid-sentence and it will instantly stop talking and listen to your new command. |
-| **Real-Time Voice Synthesis** | ElevenLabs WebSocket Streaming API generates high-fidelity speech delivered as audio chunks for minimal latency. |
+| **Browser Voice Synthesis** | Spoken replies use the browser Web Speech API (no cloud TTS required). |
 | **RAG Pipeline** | Recipes are embedded with `all-MiniLM-L6-v2` and stored in Supabase with `pgvector` for cosine similarity semantic search. |
-| **Conversational LLM** | Groq (`Llama-3.3-70b-versatile`) acts as the orchestration brain, routing intents, maintaining context, and extracting parameters. |
+| **Tool-Calling LLM** | NVIDIA NIM (`mistralai/mistral-nemotron`) runs a structured tool-calling agent loop for search, timers, navigation, shopping list, and more. |
 | **Speech-to-Text Input** | Deepgram `nova-2` streaming API provides sub-second, highly accurate transcription of continuous audio streams. |
 | **Intelligent Timers** | Context-aware timer management (e.g., "set a timer for the pasta"). Timers are fully controllable via voice. |
-| **Proactive Dietary Alerts** | Persistent warning cards and altered voice prompts for allergens, based on user profiles securely scoped by Supabase RLS. |
 
 ---
 
@@ -49,7 +48,7 @@ Navigate cooking steps hands-free, set smart timers, ask questions about ingredi
    
    pip install -r requirements.txt
    
-   # Run Supabase migrations (schema.sql & migration.sql)
+   # Run Supabase migrations (schema.sql, migration.sql, migration_agent.sql)
    # Seed recipe embeddings
    python seed_embeddings.py
    
@@ -81,8 +80,8 @@ Create `.env` files in both the `backend/` and `frontend/` directories.
 | Variable | Description |
 | --- | --- |
 | `DEEPGRAM_API_KEY` | Your Deepgram API key for real-time ASR |
-| `GROQ_API_KEY` | Your Groq API key for Llama-3 intent routing |
-| `ELEVENLABS_API_KEY` | Your ElevenLabs API key for streaming TTS |
+| `NVIDIA_API_KEY` | Your NVIDIA API key for NIM chat + tool calling |
+| `NVIDIA_MODEL` | Optional model id (default `mistralai/mistral-nemotron`) |
 | `SUPABASE_URL` | Your Supabase project URL |
 | `SUPABASE_SERVICE_KEY` | Your Supabase service/anon key |
 
@@ -91,6 +90,7 @@ Create `.env` files in both the `backend/` and `frontend/` directories.
 | --- | --- |
 | `VITE_SUPABASE_URL` | Your Supabase project URL |
 | `VITE_SUPABASE_ANON_KEY` | Your Supabase anon key for client-side Auth |
+| `VITE_WS_URL` | Optional WebSocket base (default `ws://localhost:8000`) |
 
 ---
 
@@ -107,8 +107,8 @@ Create `.env` files in both the `backend/` and `frontend/` directories.
 | **pgvector** | Postgres extension for cosine-distance vector search |
 | **Sentence-Transformers** | Local embedding generation (`all-MiniLM-L6-v2`) |
 | **Deepgram** | Streaming Speech-to-Text (ASR) engine |
-| **Groq API** | Ultra-fast LLM orchestration (`Llama-3.3-70b-versatile`) |
-| **ElevenLabs** | Streaming Text-to-Speech (TTS) synthesis |
+| **NVIDIA NIM API** | LLM orchestration with structured tool calling |
+| **Web Speech API** | Browser text-to-speech (client-side) |
 
 #### Frontend
 | Technology | Purpose |
@@ -127,7 +127,7 @@ Create `.env` files in both the `backend/` and `frontend/` directories.
 Real-time conversational voice interaction, streaming audio in and out.
 
 * **Client → Server**: Client streams raw audio data captured from the microphone via the Web Audio API.
-* **Server → Client**: Server processes the audio, routes the intent, and streams back synthesized speech audio chunks from ElevenLabs, along with structured JSON events (e.g., timer triggers, navigation updates).
+* **Server → Client**: Server runs the NVIDIA tool-calling agent and streams back structured JSON events (`ai_action`, `ai_text`). The browser speaks replies via Web Speech.
 
 ### REST — `/recipes`
 Manage and query the recipe catalog.

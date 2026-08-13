@@ -13,7 +13,8 @@ import {
   getCookingHistory,
   addCookingHistory,
   createRecipe,
-  deleteRecipe
+  deleteRecipe,
+  importRecipeFromUrl
 } from './lib/supabase';
 import RecipeCard from './components/RecipeCard';
 import Waveform from './components/Waveform';
@@ -22,6 +23,7 @@ import Auth from './components/Auth';
 import UserProfilePanel from './components/UserProfilePanel';
 import HistoryPanel from './components/HistoryPanel';
 import ChatArea from './components/ChatArea';
+import ShoppingListPanel from './components/ShoppingListPanel';
 import { Recipe, UserProfile, Favorite, CookingHistoryEntry } from './types';
 import { Session } from '@supabase/supabase-js';
 
@@ -56,6 +58,10 @@ export default function App() {
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showProfilePanel, setShowProfilePanel] = useState(false);
   const [showHistoryPanel, setShowHistoryPanel] = useState(false);
+  const [showShoppingList, setShowShoppingList] = useState(false);
+  const [shoppingRefreshKey, setShoppingRefreshKey] = useState(0);
+  const [importUrl, setImportUrl] = useState('');
+  const [importing, setImporting] = useState(false);
 
   // Text chat input
   const [textInput, setTextInput] = useState('');
@@ -360,11 +366,10 @@ export default function App() {
       recipe: selectedRecipe,
       current_step: currentStep,
       timers: timers.timers,
-      tts_mode: voice.ttsMode,
-      allergies: userProfile?.allergies || [],
+      tts_mode: 'web_speech',
       dietary_preferences: userProfile?.dietary_preferences || []
     });
-  }, [view, selectedRecipe, currentStep, timers.timers, voice.ttsMode, userProfile]);
+  }, [view, selectedRecipe, currentStep, timers.timers, userProfile]);
 
   // Local Web Speech synthesis for UI-triggered reading
   const speakLocal = (text: string) => {
@@ -379,7 +384,7 @@ export default function App() {
     window.speechSynthesis.speak(utterance);
   };
 
-  // Handle voice actions received from LLM
+  // Handle voice actions received from AI tools
   useEffect(() => {
     if (!voice.latestAction) return;
 
@@ -388,23 +393,43 @@ export default function App() {
 
     switch (type) {
       case 'next_step':
-        if (view === 'cooking') handleNextStep();
+        if (view === 'cooking') {
+          if (typeof params?.step_index === 'number') {
+            setCurrentStep(params.step_index);
+          } else {
+            handleNextStep();
+          }
+        }
         break;
       case 'prev_step':
-        if (view === 'cooking') handlePrevStep();
+        if (view === 'cooking') {
+          if (typeof params?.step_index === 'number') {
+            setCurrentStep(params.step_index);
+          } else {
+            handlePrevStep();
+          }
+        }
         break;
       case 'repeat_step':
-        if (view === 'cooking') handleRepeatStep();
+        if (view === 'cooking') {
+          if (typeof params?.step_index === 'number') {
+            setCurrentStep(params.step_index);
+          } else {
+            handleRepeatStep();
+          }
+        }
         break;
       case 'set_timer':
-        if (view === 'cooking' && params?.duration) {
+        if (params?.duration) {
           timers.addTimer(params.duration, params.label || 'Cooking Timer');
         }
         break;
       case 'cancel_timer':
-        if (view === 'cooking' && params?.label) {
+        if (params?.label) {
           const match = timers.timers.find(t => t.label.toLowerCase().includes(params.label!.toLowerCase()));
           if (match) timers.removeTimer(match.id);
+        } else if (params?.id) {
+          timers.removeTimer(params.id);
         }
         break;
       case 'search_recipes':
@@ -413,13 +438,16 @@ export default function App() {
           setUseSemanticSearch(true);
           setSelectedCuisine('All');
           setView('home');
+          if (params.results && Array.isArray(params.results) && params.results.length > 0) {
+            setSearchResults(params.results as Recipe[]);
+          }
         }
         break;
       case 'select_recipe':
         if (view !== 'cooking' && params?.id) {
           const found = recipes.find(
             r => r.id === params.id || r.title.toLowerCase().includes(params.id!.toLowerCase())
-          );
+          ) || (params as any).recipe;
           if (found) {
             handleSelectRecipe(found);
           }
@@ -427,6 +455,30 @@ export default function App() {
         break;
       case 'start_cooking':
         if (view !== 'cooking') handleStartCooking();
+        break;
+      case 'scale_recipe':
+        if (selectedRecipe && params?.ingredients && params?.servings) {
+          setSelectedRecipe({
+            ...selectedRecipe,
+            servings: params.servings,
+            ingredients: params.ingredients,
+          });
+        }
+        break;
+      case 'shopping_list_updated':
+        setShoppingRefreshKey((k) => k + 1);
+        setShowShoppingList(true);
+        break;
+      case 'memory_saved':
+        break;
+      case 'recipe_imported':
+        loadAllRecipes();
+        if (params?.recipe) {
+          handleSelectRecipe(params.recipe as Recipe);
+        } else if (params?.id) {
+          const found = recipes.find(r => r.id === params.id);
+          if (found) handleSelectRecipe(found);
+        }
         break;
       default:
         break;
@@ -455,19 +507,7 @@ export default function App() {
     if (selectedRecipe && selectedRecipe.steps.length > 0) {
       setTimeout(() => {
         const text = `Let's start cooking ${selectedRecipe.title}. Step 1: ${selectedRecipe.steps[0].text}`;
-        
-        // Allergen warnings check on start
-        const allergensInRecipe = selectedRecipe.ingredients.filter(ing => 
-          userProfile?.allergies.some(all => ing.name.toLowerCase().includes(all.toLowerCase()))
-        );
-        let warnText = '';
-        if (allergensInRecipe.length > 0) {
-          warnText = ` Warning: This recipe contains allergen items: ${allergensInRecipe.map(i => i.name).join(', ')}.`;
-        }
-
-        if (voice.ttsMode === 'web_speech') {
-          speakLocal(text + warnText);
-        }
+        speakLocal(text);
       }, 500);
     }
 
@@ -478,7 +518,7 @@ export default function App() {
         recipe: selectedRecipe,
         current_step: 0,
         timers: timers.timers,
-        allergies: userProfile?.allergies || []
+        dietary_preferences: userProfile?.dietary_preferences || []
       }).catch((err) => console.error('Failed to start voice chat:', err));
     }
   };
@@ -538,10 +578,6 @@ export default function App() {
     handleSelectRecipe(recipes[randIdx]);
   };
 
-  const toggleTtsMode = () => {
-    voice.setTtsMode(prev => prev === 'web_speech' ? 'elevenlabs' : 'web_speech');
-  };
-
   const handleTextSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!textInput.trim()) return;
@@ -578,6 +614,12 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-4">
+            <button
+              onClick={() => setShowShoppingList(true)}
+              className="text-sm font-bold px-4 py-2 rounded-full text-[#78786C] hover:text-[#2C2C24] bg-[#F0EBE5]/50 border border-[#DED8CF] hover:bg-[#F0EBE5] transition-all duration-300 cursor-pointer"
+            >
+              Shopping List
+            </button>
             {/* Admin Portal Toggle */}
             {userProfile?.is_admin && (
               <button
@@ -946,6 +988,39 @@ export default function App() {
               <h1 className="text-3xl font-serif font-bold text-[#2C2C24]">Admin Portal</h1>
             </div>
 
+            <div className="bg-white/70 border border-[#DED8CF]/50 rounded-[2rem] p-6 shadow-float flex flex-col md:flex-row gap-4 items-end">
+              <div className="flex-1 w-full">
+                <label className="block text-xs font-bold uppercase tracking-wider text-[#78786C] mb-2">Import recipe from URL</label>
+                <input
+                  type="url"
+                  value={importUrl}
+                  onChange={(e) => setImportUrl(e.target.value)}
+                  placeholder="https://…"
+                  className="w-full px-5 py-3.5 rounded-full border border-[#DED8CF] focus:border-[#5D7052] focus:ring-2 focus:ring-[#5D7052]/20 focus:outline-none text-sm bg-[#FDFCF8]"
+                />
+              </div>
+              <button
+                disabled={importing || !importUrl.trim()}
+                onClick={async () => {
+                  setImporting(true);
+                  setAdminError('');
+                  try {
+                    await importRecipeFromUrl(importUrl.trim());
+                    setImportUrl('');
+                    setAdminSuccess('Recipe imported and embedded.');
+                    await loadAllRecipes();
+                  } catch (err: any) {
+                    setAdminError(err.message || 'Import failed');
+                  } finally {
+                    setImporting(false);
+                  }
+                }}
+                className="bg-[#5D7052] text-white font-bold px-6 py-3.5 rounded-full disabled:opacity-50"
+              >
+                {importing ? 'Importing…' : 'Import'}
+              </button>
+            </div>
+
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
               {/* Recipe Manager List */}
               <div className="lg:col-span-4 bg-white/70 backdrop-blur-md border border-[#DED8CF]/50 rounded-[2rem] p-8 shadow-float flex flex-col gap-6">
@@ -1201,29 +1276,11 @@ export default function App() {
                 </div>
 
                 <div className="flex items-center gap-4">
-                  {/* Voice Premium toggle switch */}
                   <div className="flex items-center gap-2 bg-[#2C2C24] border border-[#4A4A40] rounded-full px-4 py-2 shadow-inner">
                     <span className="text-[10px] font-bold text-[#A0A096] uppercase tracking-wider">Voice:</span>
-                    <button 
-                      onClick={toggleTtsMode}
-                      className={`text-[10px] font-bold px-3 py-1.5 rounded-full uppercase tracking-wider transition-colors cursor-pointer ${
-                        voice.ttsMode === 'web_speech' 
-                          ? 'bg-[#4A4A40] text-[#F3F4F1] shadow-soft' 
-                          : 'text-[#A0A096] hover:text-[#F3F4F1]'
-                      }`}
-                    >
-                      Standard
-                    </button>
-                    <button 
-                      onClick={toggleTtsMode}
-                      className={`text-[10px] font-bold px-3 py-1.5 rounded-full uppercase tracking-wider transition-colors cursor-pointer ${
-                        voice.ttsMode === 'elevenlabs' 
-                          ? 'bg-[#5D7052] text-[#F3F4F1] shadow-soft' 
-                          : 'text-[#A0A096] hover:text-[#F3F4F1]'
-                      }`}
-                    >
-                      Premium
-                    </button>
+                    <span className="text-[10px] font-bold px-3 py-1.5 rounded-full uppercase tracking-wider bg-[#4A4A40] text-[#F3F4F1] shadow-soft">
+                      Web Speech
+                    </span>
                   </div>
                 </div>
               </div>
@@ -1441,6 +1498,12 @@ export default function App() {
       <HistoryPanel 
         isOpen={showHistoryPanel} 
         onClose={() => setShowHistoryPanel(false)} 
+      />
+
+      <ShoppingListPanel
+        isOpen={showShoppingList}
+        onClose={() => setShowShoppingList(false)}
+        refreshKey={shoppingRefreshKey}
       />
 
       {/* Recipe Completion Star Rating Modal */}
