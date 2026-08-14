@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Message, VoiceAction } from '../types';
+import { Message, VoiceAction, ModelProvider } from '../types';
 import { getToken, getWsUrl } from '../lib/api';
 
 export function useVoiceChat() {
@@ -11,6 +11,9 @@ export function useVoiceChat() {
   const [status, setStatus] = useState<'idle' | 'connecting' | 'recording' | 'isAiThinking' | 'isAiSpeaking'>('idle');
   const [interimTranscript, setInterimTranscript] = useState('');
   const [ttsMode, setTtsMode] = useState<'web_speech'>('web_speech');
+  // Which LLM backend the agent uses this session ('llama' = Groq,
+  // 'nvidia' = OpenRouter Nemotron). Chosen in the assistant's opening menu.
+  const [modelProvider, setModelProvider] = useState<ModelProvider>('llama');
   const [latestAction, setLatestAction] = useState<VoiceAction | null>(null);
   
   // Real Audio Analyser state
@@ -33,6 +36,7 @@ export function useVoiceChat() {
   const isAiThinkingRef = useRef(false);
   const isAiSpeakingRef = useRef(false);
   const ttsModeRef = useRef<'web_speech'>('web_speech');
+  const modelProviderRef = useRef<ModelProvider>('llama');
 
   useEffect(() => {
     isAiThinkingRef.current = isAiThinking;
@@ -45,6 +49,10 @@ export function useVoiceChat() {
   useEffect(() => {
     ttsModeRef.current = ttsMode;
   }, [ttsMode]);
+
+  useEffect(() => {
+    modelProviderRef.current = modelProvider;
+  }, [modelProvider]);
 
   // Decode Base64 to Int16Array
   const base64ToInt16Array = (base64: string): Int16Array => {
@@ -240,10 +248,14 @@ export function useVoiceChat() {
         reconnectAttemptsRef.current = 0; // reset reconnect counter
         startRecording(stream);
         
-        // Sync initial state if provided
+        // Sync initial state if provided, including the chosen model provider.
+        const baseState = {
+          tts_mode: ttsModeRef.current,
+          model_provider: modelProviderRef.current,
+        };
         ws.send(JSON.stringify({
           type: 'state_update',
-          state: initialState ? { ...initialState, tts_mode: ttsModeRef.current } : { tts_mode: ttsModeRef.current }
+          state: initialState ? { ...initialState, ...baseState } : baseState,
         }));
       };
 
@@ -431,6 +443,12 @@ export function useVoiceChat() {
     sendStateUpdate({ tts_mode: ttsMode });
   }, [ttsMode]);
 
+  // Push model-provider changes to the backend so the switch takes effect on
+  // the next turn without reconnecting (no-op if the socket isn't open yet).
+  useEffect(() => {
+    sendStateUpdate({ model_provider: modelProvider });
+  }, [modelProvider]);
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
@@ -449,6 +467,8 @@ export function useVoiceChat() {
     status,
     ttsMode,
     setTtsMode,
+    modelProvider,
+    setModelProvider,
     latestAction,
     setLatestAction,
     sendStateUpdate,

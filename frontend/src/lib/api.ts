@@ -7,6 +7,7 @@ import {
   AuthUser,
   ShoppingListItem,
   UserMemory,
+  ProviderInfo,
 } from '../types';
 
 // Base URL of the FastAPI backend. Override with VITE_API_BASE_URL when deploying.
@@ -105,6 +106,15 @@ async function parse(response: Response, fallbackMessage: string) {
     throw new Error(errData.detail || fallbackMessage);
   }
   return response.json();
+}
+
+// --------------------------------------------------------------------------- //
+// LLM providers (drives the model selector). Public endpoint, no auth needed.
+// --------------------------------------------------------------------------- //
+
+export async function fetchProviders(): Promise<ProviderInfo[]> {
+  const response = await fetch(`${API_BASE_URL}/providers`);
+  return parse(response, 'Failed to load model providers');
 }
 
 // --------------------------------------------------------------------------- //

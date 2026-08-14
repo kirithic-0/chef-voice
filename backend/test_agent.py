@@ -160,7 +160,11 @@ async def test_set_timer_tool_is_called_and_state_updates():
         tool_call_response("set_timer", {"duration": 600, "label": "Pasta"}),
         text_response("Timer set for 10 minutes."),
     ])
-    ctx = make_ctx(http_client=client)
+    # Timers are a cooking-mode action, so the agent is offered the cooking tools.
+    ctx = make_ctx(
+        cooking_state={"screen": "cooking", "recipe": None, "current_step": 0, "timers": []},
+        http_client=client,
+    )
     events, send = await collector()
 
     final = await agent.run_agent_turn(

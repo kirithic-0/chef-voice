@@ -180,6 +180,18 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
 ]
 
+# Tool subsets by screen. Offering only the relevant tools per screen trims the
+# tool-schema tokens sent on every request (and nudges the model toward the right
+# action). Inline-text tool recovery in agent.py still knows the full set.
+_HOME_TOOL_NAMES = {"search_recipes", "get_recipe", "select_recipe", "start_cooking", "import_recipe_from_url"}
+_COOKING_TOOL_NAMES = {"get_current_step", "navigate_step", "set_timer", "cancel_timer"}
+
+
+def tools_for_screen(screen: Optional[str]) -> list[dict[str, Any]]:
+    """Return only the TOOL_DEFINITIONS relevant to the current screen."""
+    names = _COOKING_TOOL_NAMES if screen == "cooking" else _HOME_TOOL_NAMES
+    return [t for t in TOOL_DEFINITIONS if t["function"]["name"] in names]
+
 
 @dataclass
 class ToolContext:
@@ -191,6 +203,22 @@ class ToolContext:
     llm_model: str
     # OpenAI-compatible chat endpoint (Groq by default; set from LLM_BASE_URL).
     llm_base_url: str = "https://api.groq.com/openai/v1/chat/completions"
+    # Per-provider request tweaks, set by main.py from the selected provider.
+    # fallback_model: the "auto" sentinel means "use the agent's built-in Groq
+    # fallback"; None means "no fallback" (e.g. OpenRouter has no cheap sibling
+    # wired up); any other string is used verbatim.
+    fallback_model: Optional[str] = "auto"
+    max_tokens: int = 512
+    # Per-request timeouts (seconds). None -> use the agent's built-in defaults.
+    request_timeout: Optional[float] = None
+    stream_timeout: Optional[float] = None
+    # Extra HTTP headers / request-body fields merged into each LLM call (e.g.
+    # OpenRouter attribution headers, reasoning-model controls). extra_body is
+    # sent on tool-selection rounds; final_extra_body on the final spoken-reply
+    # pass (lets us keep reasoning on for tool choice but off for clean speech).
+    extra_headers: dict[str, Any] = field(default_factory=dict)
+    extra_body: dict[str, Any] = field(default_factory=dict)
+    final_extra_body: dict[str, Any] = field(default_factory=dict)
     ui_actions: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -273,14 +301,23 @@ def build_system_prompt(cooking_state: dict[str, Any]) -> str:
     recipe_context = "None"
     step_context = "None"
     if recipe:
+        steps = recipe.get("steps", []) or []
+        ingredients = recipe.get("ingredients", []) or []
+        # Compact ingredient list ("2 tbsp Olive oil, ...") instead of full JSON.
+        ing_str = ", ".join(
+            " ".join(str(p) for p in (i.get("amount"), i.get("unit"), i.get("name")) if p).strip()
+            for i in ingredients
+        ) or "None"
+        # Only the current step (+ immediate neighbors) is included here — NOT
+        # every step — to keep the per-request token cost low. The model reads
+        # step text verbatim from the navigate_step / get_current_step results.
         recipe_context = (
             f"Title: {recipe.get('title')}\n"
             f"Cuisine: {recipe.get('cuisine')}\n"
             f"Servings: {recipe.get('servings')}\n"
-            f"Ingredients: {json.dumps(recipe.get('ingredients'))}\n"
-            f"All Recipe Steps: {json.dumps(recipe.get('steps'))}"
+            f"Ingredients: {ing_str}\n"
+            f"Total steps: {len(steps)}"
         )
-        steps = recipe.get("steps", [])
         if 0 <= current_step_idx < len(steps):
             curr_step = steps[current_step_idx]
             step_context = f"Step {current_step_idx + 1} of {len(steps)}: {curr_step.get('text')}"
@@ -288,6 +325,10 @@ def build_system_prompt(cooking_state: dict[str, Any]) -> str:
                 step_context += f" (SAFETY ALERT: {curr_step.get('safety_alert')})"
             if curr_step.get("timer_duration"):
                 step_context += f" (Suggested Timer: {curr_step.get('timer_duration')} seconds)"
+            if current_step_idx + 1 < len(steps):
+                step_context += f"\nNext (Step {current_step_idx + 2}): {steps[current_step_idx + 1].get('text')}"
+            if current_step_idx - 1 >= 0:
+                step_context += f"\nPrevious (Step {current_step_idx}): {steps[current_step_idx - 1].get('text')}"
 
     dietary_str = ", ".join(dietary_prefs) if dietary_prefs else "None"
 
@@ -587,7 +628,10 @@ async def tool_import_recipe_from_url(args: dict, ctx: ToolContext) -> dict:
     headers = {
         "Authorization": f"Bearer {ctx.llm_api_key}",
         "Content-Type": "application/json",
+        **(ctx.extra_headers or {}),
     }
+    if ctx.extra_body:
+        body.update(ctx.extra_body)
     try:
         nresp = await ctx.http_client.post(ctx.llm_base_url, headers=headers, json=body, timeout=60.0)
         nresp.raise_for_status()

@@ -16,7 +16,7 @@ from typing import Any, Awaitable, Callable, Optional
 
 import httpx
 
-from tools import TOOL_DEFINITIONS, ToolContext, build_system_prompt, execute_tool
+from tools import TOOL_DEFINITIONS, ToolContext, build_system_prompt, execute_tool, tools_for_screen
 
 # Groq's OpenAI-compatible Chat Completions endpoint. Override per-request via
 # ToolContext.llm_base_url (set from the LLM_BASE_URL env var in main.py).
@@ -27,7 +27,9 @@ GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
 # OpenAI-style function calling and are chosen for Groq's low latency.
 DEFAULT_MODEL = "llama-3.3-70b-versatile"
 FALLBACK_MODEL = "llama-3.1-8b-instant"
-MAX_TOOL_ROUNDS = 4
+# Most turns need one tool call + a reply. Cap rounds low to save both requests
+# (free-tier daily caps) and tokens (each round re-sends the whole context).
+MAX_TOOL_ROUNDS = 2
 TOOL_CALL_TIMEOUT = 25.0
 STREAM_TIMEOUT = 45.0
 
@@ -56,12 +58,16 @@ async def _llm_chat(
     temperature: float = 0.4,
     max_tokens: int = 512,
     timeout: float = TOOL_CALL_TIMEOUT,
+    extra_headers: Optional[dict] = None,
+    extra_body: Optional[dict] = None,
 ) -> Any:
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
         "Accept": "text/event-stream" if stream else "application/json",
     }
+    if extra_headers:
+        headers.update(extra_headers)
     body: dict[str, Any] = {
         "model": model,
         "messages": messages,
@@ -73,6 +79,8 @@ async def _llm_chat(
         body["tools"] = tools
     if tool_choice is not None:
         body["tool_choice"] = tool_choice
+    if extra_body:
+        body.update(extra_body)
 
     if stream:
         return http_client.stream("POST", chat_url, headers=headers, json=body, timeout=timeout)
@@ -88,59 +96,50 @@ async def _llm_chat_with_fallback(
     messages: list[dict],
     *,
     chat_url: str = GROQ_CHAT_URL,
+    fallback_model: Optional[str] = FALLBACK_MODEL,
     tools: Optional[list] = None,
     tool_choice: Optional[str] = None,
     temperature: float = 0.4,
     max_tokens: int = 512,
+    timeout: float = TOOL_CALL_TIMEOUT,
+    extra_headers: Optional[dict] = None,
+    extra_body: Optional[dict] = None,
 ) -> tuple[Any, str]:
-    """Call the LLM; on timeout/5xx, retry once with FALLBACK_MODEL if different."""
-    active = model
-    try:
-        resp = await _llm_chat(
+    """Call the LLM; on timeout/5xx, retry once with `fallback_model` (if set)."""
+
+    async def _call(active_model: str):
+        return await _llm_chat(
             http_client,
             api_key,
-            active,
+            active_model,
             messages,
             chat_url=chat_url,
             tools=tools,
             tool_choice=tool_choice,
             temperature=temperature,
             max_tokens=max_tokens,
-            timeout=TOOL_CALL_TIMEOUT,
-        )
-    except httpx.TimeoutException:
-        if active == FALLBACK_MODEL:
-            raise
-        _log(f"[agent] timeout on {active}, falling back to {FALLBACK_MODEL}")
-        active = FALLBACK_MODEL
-        resp = await _llm_chat(
-            http_client,
-            api_key,
-            active,
-            messages,
-            chat_url=chat_url,
-            tools=tools,
-            tool_choice=tool_choice,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            timeout=TOOL_CALL_TIMEOUT,
+            timeout=timeout,
+            extra_headers=extra_headers,
+            extra_body=extra_body,
         )
 
-    if resp.status_code >= 500 and active != FALLBACK_MODEL:
-        _log(f"[agent] {active} returned {resp.status_code}, falling back to {FALLBACK_MODEL}")
-        active = FALLBACK_MODEL
-        resp = await _llm_chat(
-            http_client,
-            api_key,
-            active,
-            messages,
-            chat_url=chat_url,
-            tools=tools,
-            tool_choice=tool_choice,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            timeout=TOOL_CALL_TIMEOUT,
-        )
+    def _can_fallback(active: str) -> bool:
+        return bool(fallback_model) and active != fallback_model
+
+    active = model
+    try:
+        resp = await _call(active)
+    except httpx.TimeoutException:
+        if not _can_fallback(active):
+            raise
+        _log(f"[agent] timeout on {active}, falling back to {fallback_model}")
+        active = fallback_model
+        resp = await _call(active)
+
+    if resp.status_code >= 500 and _can_fallback(active):
+        _log(f"[agent] {active} returned {resp.status_code}, falling back to {fallback_model}")
+        active = fallback_model
+        resp = await _call(active)
 
     return resp, active
 
@@ -177,6 +176,15 @@ _STRAY_MARKUP_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Reasoning models sometimes wrap chain-of-thought in <think>...</think> (or
+# <thinking>/<reasoning>) inside the message content. Strip those so the CoT is
+# never spoken, even if a provider fails to suppress reasoning. Also handles an
+# unclosed opener (reasoning that runs to the end of the message).
+_THINK_RE = re.compile(
+    r"<\s*(think|thinking|reasoning)\s*>.*?(?:<\s*/\s*\1\s*>|\Z)",
+    re.IGNORECASE | re.DOTALL,
+)
+
 
 def _extract_inline_tool_calls(text: str) -> tuple[list[tuple[str, dict]], str]:
     """Pull tool-call markup the model wrote as text. Returns (calls, cleaned_text)."""
@@ -198,6 +206,7 @@ def _sanitize_spoken_text(text: str) -> str:
     if not text:
         return ""
     _, cleaned = _extract_inline_tool_calls(text)
+    cleaned = _THINK_RE.sub(" ", cleaned)
     cleaned = _STRAY_MARKUP_RE.sub(" ", cleaned)
     return re.sub(r"\s+", " ", cleaned).strip()
 
@@ -210,25 +219,35 @@ async def stream_final_text(
     send_json: SendJson,
     *,
     chat_url: str = GROQ_CHAT_URL,
+    max_tokens: int = 512,
+    timeout: float = STREAM_TIMEOUT,
+    extra_headers: Optional[dict] = None,
+    extra_body: Optional[dict] = None,
 ) -> str:
     """Stream final assistant tokens to the client as ai_text_partial, return full text."""
     full = []
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream",
+    }
+    if extra_headers:
+        headers.update(extra_headers)
+    body: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "temperature": 0.4,
+        "max_tokens": max_tokens,
+        "stream": True,
+    }
+    if extra_body:
+        body.update(extra_body)
     async with http_client.stream(
         "POST",
         chat_url,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "Accept": "text/event-stream",
-        },
-        json={
-            "model": model,
-            "messages": messages,
-            "temperature": 0.4,
-            "max_tokens": 512,
-            "stream": True,
-        },
-        timeout=STREAM_TIMEOUT,
+        headers=headers,
+        json=body,
+        timeout=timeout,
     ) as resp:
         if resp.status_code >= 400:
             err_body = await resp.aread()
@@ -271,13 +290,29 @@ async def run_agent_turn(
     t0 = time.time()
     ctx.ui_actions.clear()
     chat_url = ctx.llm_base_url or GROQ_CHAT_URL
+    # The "auto" sentinel means "use the built-in Groq fallback"; an explicit
+    # None (e.g. OpenRouter) disables fallback; any other string is used as-is.
+    fallback_model = FALLBACK_MODEL if ctx.fallback_model == "auto" else ctx.fallback_model
+    extra_headers = ctx.extra_headers or None
+    # extra_body is sent on tool-selection rounds; final_extra_body on the final
+    # spoken-reply pass. When they differ (e.g. reasoning on for tools, off for
+    # speech), we never speak a tool-round's content directly — we always
+    # generate the reply with final_extra_body so no chain-of-thought leaks in.
+    extra_body = ctx.extra_body or None
+    final_extra_body = ctx.final_extra_body or None
+    force_clean_final = final_extra_body != extra_body
+    max_tokens = ctx.max_tokens or 512
+    req_timeout = ctx.request_timeout or TOOL_CALL_TIMEOUT
+    stream_timeout = ctx.stream_timeout or STREAM_TIMEOUT
 
     system = build_system_prompt(ctx.cooking_state)
     messages: list[dict] = [
         {"role": "system", "content": system},
-        *history[-8:],
+        *history[-4:],
         {"role": "user", "content": user_text},
     ]
+    # Offer only the tools relevant to the current screen (fewer schema tokens).
+    active_tools = tools_for_screen(ctx.cooking_state.get("screen"))
 
     active_model = model
     final_text = ""
@@ -290,22 +325,32 @@ async def run_agent_turn(
             active_model,
             messages,
             chat_url=chat_url,
-            tools=TOOL_DEFINITIONS,
+            fallback_model=fallback_model,
+            tools=active_tools,
             tool_choice="auto",
+            max_tokens=max_tokens,
+            timeout=req_timeout,
+            extra_headers=extra_headers,
+            extra_body=extra_body,
         )
 
-        if resp.status_code == 400 and active_model != FALLBACK_MODEL:
+        if resp.status_code == 400 and fallback_model and active_model != fallback_model:
             # Some models reject tools; fall back once
             _log(f"[agent] model {active_model} rejected tools ({resp.text[:300]}), trying fallback")
-            active_model = FALLBACK_MODEL
+            active_model = fallback_model
             resp, active_model = await _llm_chat_with_fallback(
                 ctx.http_client,
                 ctx.llm_api_key,
                 active_model,
                 messages,
                 chat_url=chat_url,
-                tools=TOOL_DEFINITIONS,
+                fallback_model=fallback_model,
+                tools=active_tools,
                 tool_choice="auto",
+                max_tokens=max_tokens,
+                timeout=req_timeout,
+                extra_headers=extra_headers,
+                extra_body=extra_body,
             )
 
         if resp.status_code >= 400:
@@ -372,7 +417,12 @@ async def run_agent_turn(
                 })
             continue
 
-        # No tool calls — take content as final (may stream a polished reply)
+        # No tool calls. When the final reply must use a different config than the
+        # tool rounds (e.g. reasoning off, so no chain-of-thought leaks into
+        # speech), don't speak this round's content — fall through to the clean
+        # final pass below. Otherwise take the content directly.
+        if force_clean_final:
+            break
         final_text = _sanitize_spoken_text(content)
         break
     # Prefer streaming final text for snappier UI when tools exhausted without content
@@ -380,7 +430,7 @@ async def run_agent_turn(
         wrap_messages = list(messages)
         wrap_messages.append({
             "role": "user",
-            "content": "Please give your spoken reply to the user now based on the tool results. No more tools. Natural language only.",
+            "content": "Now reply to the user out loud in natural, friendly spoken language. Do not call tools and do not narrate any reasoning.",
         })
         try:
             final_text = await stream_final_text(
@@ -390,6 +440,10 @@ async def run_agent_turn(
                 wrap_messages,
                 send_json,
                 chat_url=chat_url,
+                max_tokens=max_tokens,
+                timeout=stream_timeout,
+                extra_headers=extra_headers,
+                extra_body=final_extra_body,
             )
         except Exception as e:
             _log(f"[agent] stream failed, falling back to non-stream: {type(e).__name__}: {e!r}")
@@ -399,8 +453,10 @@ async def run_agent_turn(
                 active_model,
                 wrap_messages,
                 chat_url=chat_url,
-                max_tokens=512,
-                timeout=TOOL_CALL_TIMEOUT,
+                max_tokens=max_tokens,
+                timeout=req_timeout,
+                extra_headers=extra_headers,
+                extra_body=final_extra_body,
             )
             resp.raise_for_status()
             final_text = ((resp.json().get("choices") or [{}])[0].get("message") or {}).get("content") or ""

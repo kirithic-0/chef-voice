@@ -15,21 +15,20 @@ from sentence_transformers import SentenceTransformer
 
 import database as db
 import auth
-from agent import DEFAULT_MODEL, GROQ_CHAT_URL, run_agent_turn
+import providers
+from agent import run_agent_turn
 from tools import ToolContext
 
 load_dotenv()
 
 # Third-party API keys for the real-time voice pipeline.
-# Deepgram = streaming speech-to-text; Groq = tool-calling LLM agent.
+# Deepgram = streaming speech-to-text (required for the voice socket to work).
 # Text-to-speech is handled client-side with the browser Web Speech API.
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 
-# LLM provider (Groq by default). Groq is OpenAI-compatible, so LLM_BASE_URL can
-# point at any compatible endpoint (e.g. NVIDIA NIM) without code changes.
-GROQ_API_KEY = os.getenv("GROQ_API_KEY") or os.getenv("LLM_API_KEY")
-LLM_MODEL = os.getenv("GROQ_MODEL") or os.getenv("LLM_MODEL") or DEFAULT_MODEL
-LLM_BASE_URL = os.getenv("LLM_BASE_URL", GROQ_CHAT_URL)
+# LLM provider is chosen per session by the client's model selector and resolved
+# via providers.resolve_provider() ("llama" = Groq, "nvidia" = OpenRouter
+# Nemotron). Both are OpenAI-compatible, so the agent loop is unchanged.
 
 # Comma-separated list of allowed frontend origins (defaults to the Vite dev server).
 FRONTEND_ORIGINS = [
@@ -187,6 +186,16 @@ def login(creds: Credentials):
 @app.get("/auth/user")
 def get_authenticated_user(user: dict = Depends(get_current_user)):
     return user
+
+
+# --------------------------------------------------------------------------- #
+# LLM provider catalogue (drives the frontend's model selector)
+# --------------------------------------------------------------------------- #
+
+@app.get("/providers")
+def get_providers():
+    """List selectable LLM providers and whether each has an API key configured."""
+    return providers.list_providers()
 
 
 # --------------------------------------------------------------------------- #
@@ -356,8 +365,13 @@ def post_memory(memory: MemoryCreate, user: dict = Depends(get_current_user)):
 
 @app.post("/recipes/import")
 async def import_recipe(req: ImportRequest, user: dict = Depends(get_current_user)):
-    if not GROQ_API_KEY:
-        raise HTTPException(status_code=500, detail="GROQ_API_KEY is not configured.")
+    # Recipe extraction uses the server's default LLM provider.
+    provider = providers.resolve_provider(None)
+    if not provider["api_key"]:
+        raise HTTPException(
+            status_code=500,
+            detail=f"{provider['label']} is not configured (missing API key).",
+        )
     url = req.url.strip()
     if not url:
         raise HTTPException(status_code=400, detail="url is required")
@@ -370,9 +384,11 @@ async def import_recipe(req: ImportRequest, user: dict = Depends(get_current_use
             user_id=user["id"],
             http_client=client,
             embedding_model=embedding_model,
-            llm_api_key=GROQ_API_KEY,
-            llm_model=LLM_MODEL,
-            llm_base_url=LLM_BASE_URL,
+            llm_api_key=provider["api_key"],
+            llm_model=provider["model"],
+            llm_base_url=provider["base_url"],
+            extra_headers=provider["extra_headers"],
+            extra_body=provider["extra_body"],
         )
         result = await tool_import_recipe_from_url({"url": url}, ctx)
         if result.get("error"):
@@ -408,9 +424,12 @@ async def websocket_chat(client_ws: WebSocket):
         await client_ws.close()
         return
 
-    if not DEEPGRAM_API_KEY or not GROQ_API_KEY:
-        print("Missing required API keys in environment.")
-        await client_ws.send_json({"type": "error", "message": "Missing API keys on server."})
+    if not DEEPGRAM_API_KEY:
+        print("Missing Deepgram API key in environment.")
+        await client_ws.send_json({
+            "type": "error",
+            "message": "Voice input is unavailable: the server is missing its Deepgram API key.",
+        })
         await client_ws.close()
         return
 
@@ -444,25 +463,44 @@ async def websocket_chat(client_ws: WebSocket):
         })
         history.append({"role": "user", "content": combined_transcript})
 
+        # Resolve the LLM provider the client picked in its model selector
+        # (sent as `model_provider` in the session state). Falls back to the
+        # server default when absent/unknown.
+        provider = providers.resolve_provider(cooking_state.get("model_provider"))
+        if not provider["api_key"]:
+            await client_ws.send_json({
+                "type": "error",
+                "message": f"{provider['label']} isn't configured on the server. "
+                           f"Add its API key to backend/.env and restart.",
+            })
+            return
+
         ctx = ToolContext(
             cooking_state=cooking_state,
             user_id=user_id,
             http_client=http_client,
             embedding_model=embedding_model,
-            llm_api_key=GROQ_API_KEY,
-            llm_model=LLM_MODEL,
-            llm_base_url=LLM_BASE_URL,
+            llm_api_key=provider["api_key"],
+            llm_model=provider["model"],
+            llm_base_url=provider["base_url"],
+            fallback_model=provider["fallback_model"],
+            max_tokens=provider["max_tokens"],
+            request_timeout=provider["request_timeout"],
+            stream_timeout=provider["stream_timeout"],
+            extra_headers=provider["extra_headers"],
+            extra_body=provider["extra_body"],
+            final_extra_body=provider["final_extra_body"],
         )
 
         try:
-            # Groq tool-calling agent: emits ai_action / ai_text_partial
-            # events via send_json and returns the final spoken reply.
+            # OpenAI-compatible tool-calling agent: emits ai_action /
+            # ai_text_partial events via send_json and returns the spoken reply.
             ai_reply = await run_agent_turn(
                 user_text=combined_transcript,
                 history=history[:-1],  # agent re-appends the user message itself
                 ctx=ctx,
                 send_json=client_ws.send_json,
-                model=LLM_MODEL,
+                model=provider["model"],
             )
 
             if not ai_reply:
@@ -482,10 +520,10 @@ async def websocket_chat(client_ws: WebSocket):
             })
         except httpx.HTTPStatusError as hse:
             if hse.response.status_code == 429:
-                print("Groq API 429 rate limit hit.")
+                print(f"{provider['label']} 429 rate limit hit.")
                 await client_ws.send_json({
                     "type": "error",
-                    "message": "Groq API rate limit reached. Please wait a few seconds before speaking again."
+                    "message": f"{provider['label']} rate limit reached. Please wait a few seconds before speaking again."
                 })
             else:
                 print(f"HTTP error processing AI response: {hse}")
@@ -495,10 +533,21 @@ async def websocket_chat(client_ws: WebSocket):
                 })
         except Exception as e:
             print(f"Error processing AI response: {type(e).__name__}: {e!r}")
-            await client_ws.send_json({
-                "type": "error",
-                "message": "An unexpected error occurred. Please try speaking again."
-            })
+            err = str(e)
+            # The agent surfaces LLM HTTP errors as RuntimeError("LLM error <code>: ...").
+            # Give a clear message for rate limits (esp. OpenRouter's free daily cap).
+            if "429" in err or "rate limit" in err.lower():
+                if "free-models-per-day" in err or "free_tier_daily" in err:
+                    msg = (f"{provider['label']} has hit its free daily request limit. "
+                           f"Switch to Llama, add OpenRouter credits, or try again after the daily reset.")
+                else:
+                    msg = f"{provider['label']} rate limit reached. Please wait a few seconds and try again."
+                await client_ws.send_json({"type": "error", "message": msg})
+            else:
+                await client_ws.send_json({
+                    "type": "error",
+                    "message": "An unexpected error occurred. Please try speaking again."
+                })
 
     # Initialize Queue for serializing user turns
     turn_queue = asyncio.Queue()

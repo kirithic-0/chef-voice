@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
-import { Message, Recipe } from '../types';
+import React, { useState, useEffect } from 'react';
+import { Message, Recipe, ModelProvider, ProviderInfo } from '../types';
+import { fetchProviders } from '../lib/api';
 import ChatArea from './ChatArea';
 import Waveform from './Waveform';
 
@@ -13,11 +14,24 @@ interface AssistantPanelProps {
     isMuted: boolean;
     toggleMute: () => void;
     sendTextMessage: (text: string) => void;
+    modelProvider: ModelProvider;
+    setModelProvider: (p: ModelProvider) => void;
   };
   suggestions: Recipe[];
   onPick: (recipe: Recipe) => void;
   onClose: () => void;
 }
+
+// Shown until /providers responds; keeps the selector usable offline too.
+const FALLBACK_PROVIDERS: ProviderInfo[] = [
+  { id: 'llama', label: 'Llama 3.3 70B (Groq)', model: '', available: true, default: true },
+  { id: 'nvidia', label: 'Nemotron 3 Nano (OpenRouter)', model: '', available: true, default: false },
+];
+
+const SHORT_LABEL: Record<ModelProvider, string> = {
+  llama: 'Llama',
+  nvidia: 'Nemotron',
+};
 
 /**
  * Floating recipe-discovery assistant for the home/detail screens. The user
@@ -26,6 +40,20 @@ interface AssistantPanelProps {
  */
 export default function AssistantPanel({ voice, suggestions, onPick, onClose }: AssistantPanelProps) {
   const [textInput, setTextInput] = useState('');
+  const [providers, setProviders] = useState<ProviderInfo[]>(FALLBACK_PROVIDERS);
+
+  // Load the real provider catalogue (labels + which have API keys configured).
+  useEffect(() => {
+    let cancelled = false;
+    fetchProviders()
+      .then((list) => {
+        if (!cancelled && Array.isArray(list) && list.length) setProviders(list);
+      })
+      .catch(() => { /* keep fallbacks if the endpoint is unreachable */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  const activeProvider = providers.find((p) => p.id === voice.modelProvider);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -53,6 +81,41 @@ export default function AssistantPanel({ voice, suggestions, onPick, onClose }: 
             </svg>
           </button>
         </div>
+
+        {/* Model selector — pick which LLM answers this session */}
+        <div className="px-4 py-2.5 border-b border-[#2C2C24] bg-[#14140F] flex items-center gap-3">
+          <span className="text-[10px] font-bold text-[#78786C] uppercase tracking-wider shrink-0">Model</span>
+          <div className="flex bg-[#1A1A14] p-1 rounded-full border border-[#2C2C24] flex-1">
+            {providers.map((p) => {
+              const isActive = voice.modelProvider === p.id;
+              const disabled = p.available === false;
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => voice.setModelProvider(p.id)}
+                  title={disabled ? `${p.label} — API key not configured on the server` : p.label}
+                  aria-pressed={isActive}
+                  className={`flex-1 px-3 py-1.5 rounded-full text-xs font-bold transition-all cursor-pointer disabled:cursor-not-allowed disabled:opacity-40 ${
+                    isActive
+                      ? 'bg-[#5D7052] text-[#F3F4F1] shadow-sm'
+                      : 'text-[#A0A096] hover:text-[#F3F4F1]'
+                  }`}
+                >
+                  {SHORT_LABEL[p.id] ?? p.label}
+                  {disabled && <span className="ml-1 text-[9px] opacity-70">⚠</span>}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        {activeProvider?.available === false && (
+          <div className="px-4 py-2 bg-amber-500/10 border-b border-amber-500/20 text-amber-300/90 text-[11px] leading-snug">
+            {activeProvider.label} isn't configured on the server. Add its API key to
+            <span className="font-mono"> backend/.env</span> and restart, or switch models above.
+          </div>
+        )}
 
         {/* Conversation */}
         <div className="flex-1 overflow-hidden relative">

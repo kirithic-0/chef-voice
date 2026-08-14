@@ -42,6 +42,18 @@ export interface Message {
   text: string;
 }
 
+// Which LLM backend the voice agent uses ('llama' = Groq, 'nvidia' = OpenRouter
+// Nemotron). Matches the provider ids the backend's /providers endpoint returns.
+export type ModelProvider = 'llama' | 'nvidia';
+
+export interface ProviderInfo {
+  id: ModelProvider;
+  label: string;
+  model: string;
+  available: boolean;
+  default: boolean;
+}
+
 export interface VoiceAction {
   type:
     | 'next_step'
