@@ -66,14 +66,14 @@ class FakeGroqClient:
         self.calls: list[dict] = []
 
     async def post(self, url, headers=None, json=None, timeout=None):
-        self.calls.append({"url": url, "body": json})
+        self.calls.append({"url": url, "body": json, "headers": headers or {}})
         item = self.post_script.pop(0)
         if isinstance(item, Exception):
             raise item
         return item
 
     def stream(self, method, url, headers=None, json=None, timeout=None):
-        self.calls.append({"url": url, "body": json, "stream": True})
+        self.calls.append({"url": url, "body": json, "headers": headers or {}, "stream": True})
         return self.stream_script.pop(0)
 
 
@@ -365,3 +365,158 @@ async def test_streams_final_text_when_tools_exhausted_without_content():
     partials = [e for e in events if e["type"] == "ai_text_partial"]
     assert partials, "expected streamed ai_text_partial events"
     assert final == "Your egg timer is running."
+
+
+# --------------------------------------------------------------------------- #
+# Local provider: Ollama's native /api/chat dialect (api_style="ollama").
+# Response shape differs from OpenAI: the message lives at top-level `message`
+# (no `choices`), tool-call `arguments` are already a dict, requests carry
+# params under `options` + a top-level `think`/`keep_alive` and no auth header.
+# --------------------------------------------------------------------------- #
+
+def ollama_tool_call_response(name: str, args: dict, content: str = "") -> FakeResponse:
+    """An Ollama assistant message requesting one tool call (arguments as a dict)."""
+    return FakeResponse({
+        "message": {
+            "role": "assistant",
+            "content": content,
+            "tool_calls": [{"function": {"name": name, "arguments": args}}],
+        }
+    })
+
+
+def ollama_text_response(text: str) -> FakeResponse:
+    """A plain Ollama assistant message (no tool calls)."""
+    return FakeResponse({"message": {"role": "assistant", "content": text}})
+
+
+def ollama_ndjson(*pieces: str) -> FakeStream:
+    """Ollama streams newline-delimited JSON objects, ending with {"done": true}."""
+    lines = [json.dumps({"message": {"content": p}, "done": False}) for p in pieces]
+    lines.append(json.dumps({"done": True}))
+    return FakeStream(lines)
+
+
+def make_ollama_ctx(cooking_state=None, http_client=None):
+    from tools import ToolContext
+    return ToolContext(
+        cooking_state=cooking_state if cooking_state is not None else {"screen": "home", "recipe": None, "current_step": 0, "timers": []},
+        user_id="test-user",
+        http_client=http_client,
+        embedding_model=FakeEmbed(),
+        llm_api_key="local",
+        llm_model="chefvoice-gemma",
+        llm_base_url="http://localhost:11434/api/chat",
+        api_style="ollama",
+        fallback_model=None,
+        extra_body={"think": False},
+        final_extra_body={"think": False},
+    )
+
+
+@pytest.mark.asyncio
+async def test_ollama_tool_call_selection_and_native_request_shape():
+    """The ollama dialect: parse a top-level `message` with dict args, run the
+    tool, and build the request in Ollama's native shape (options/think/keep_alive,
+    no tool_choice, no max_tokens, no Authorization header)."""
+    client = FakeGroqClient(post_script=[
+        ollama_tool_call_response("set_timer", {"duration": 600, "label": "Pasta"}),
+        ollama_text_response("Timer set for 10 minutes."),
+    ])
+    ctx = make_ollama_ctx(
+        cooking_state={"screen": "cooking", "recipe": None, "current_step": 0, "timers": []},
+        http_client=client,
+    )
+    events, send = await collector()
+
+    final = await agent.run_agent_turn(
+        user_text="set a timer for 10 minutes",
+        history=[], ctx=ctx, send_json=send, model="chefvoice-gemma",
+    )
+
+    # Tool ran and mutated state (dict arguments needed no JSON-string parsing).
+    assert len(ctx.cooking_state["timers"]) == 1
+    assert ctx.cooking_state["timers"][0]["duration"] == 600
+    ui = [e for e in events if e["type"] == "ai_action"]
+    assert any(a["action"]["type"] == "set_timer" for a in ui)
+
+    # First request was built in Ollama's native dialect, not OpenAI's.
+    first = client.calls[0]
+    body = first["body"]
+    assert body["options"]["num_predict"] == ctx.max_tokens
+    assert body["think"] is False
+    assert "keep_alive" in body
+    assert "tool_choice" not in body      # Ollama auto-decides
+    assert "max_tokens" not in body       # params live under `options`
+    assert "Authorization" not in first["headers"]  # local: no API key
+    assert final == "Timer set for 10 minutes."
+
+
+@pytest.mark.asyncio
+async def test_tool_call_is_surfaced_to_ui():
+    """Every tool the agent runs emits an ai_tool_call event so the UI can show a chip."""
+    client = FakeGroqClient(post_script=[
+        tool_call_response("set_timer", {"duration": 600, "label": "Pasta"}),
+        text_response("Timer set for 10 minutes."),
+    ])
+    ctx = make_ctx(
+        cooking_state={"screen": "cooking", "recipe": None, "current_step": 0, "timers": []},
+        http_client=client,
+    )
+    events, send = await collector()
+
+    await agent.run_agent_turn(
+        user_text="set a 10 minute timer",
+        history=[], ctx=ctx, send_json=send, model=agent.DEFAULT_MODEL,
+    )
+
+    tool_events = [e for e in events if e["type"] == "ai_tool_call"]
+    assert any(e["name"] == "set_timer" and e["args"].get("duration") == 600 for e in tool_events)
+
+
+@pytest.mark.asyncio
+async def test_past_cooked_recipes_dedupes_newest_first(monkeypatch):
+    """past_cooked_recipes returns the user's history, most-recent-per-recipe, de-duped."""
+    monkeypatch.setattr(db, "list_cooking_history", lambda uid: [
+        {"rating": 5, "duration_minutes": 20, "completed_at": "2026-08-01",
+         "recipe": {"id": "r1", "title": "Weeknight Pasta", "cuisine": "Italian"}},
+        {"rating": 4, "duration_minutes": 30, "completed_at": "2026-07-30",
+         "recipe": {"id": "r1", "title": "Weeknight Pasta", "cuisine": "Italian"}},  # dup -> collapsed
+        {"rating": 3, "duration_minutes": 15, "completed_at": "2026-07-20",
+         "recipe": {"id": "r2", "title": "Greek Salad", "cuisine": "Greek"}},
+    ])
+    ctx = make_ctx()
+
+    res = await tools.tool_past_cooked_recipes({}, ctx)
+
+    assert [r["title"] for r in res["recipes"]] == ["Weeknight Pasta", "Greek Salad"]
+    assert res["count"] == 2
+    assert any(a["type"] == "past_cooked_recipes" for a in ctx.ui_actions)
+
+
+@pytest.mark.asyncio
+async def test_ollama_streams_final_text_from_ndjson():
+    """When the tool round yields no text, the ollama streaming path parses
+    newline-delimited JSON (not SSE) into a spoken reply."""
+    client = FakeGroqClient(
+        post_script=[
+            ollama_tool_call_response("set_timer", {"duration": 300, "label": "Eggs"}),
+            ollama_text_response(""),  # tool round done, no spoken text yet
+        ],
+        stream_script=[ollama_ndjson("Your egg ", "timer is running.")],
+    )
+    ctx = make_ollama_ctx(http_client=client)
+    events, send = await collector()
+
+    final = await agent.run_agent_turn(
+        user_text="start a 5 minute egg timer",
+        history=[], ctx=ctx, send_json=send, model="chefvoice-gemma",
+    )
+
+    partials = [e for e in events if e["type"] == "ai_text_partial"]
+    assert partials, "expected streamed ai_text_partial events"
+    assert final == "Your egg timer is running."
+    # The streaming request was also native (think off, streaming on).
+    stream_call = [c for c in client.calls if c.get("stream")][0]
+    assert stream_call["body"]["think"] is False
+    assert stream_call["body"]["stream"] is True

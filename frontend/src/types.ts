@@ -38,13 +38,15 @@ export interface Timer {
 
 export interface Message {
   id: string;
-  role: 'user' | 'ai';
+  // 'tool' = an immersive chip shown while the agent runs a tool (e.g. searching).
+  role: 'user' | 'ai' | 'tool';
   text: string;
 }
 
 // Which LLM backend the voice agent uses ('llama' = Groq, 'nvidia' = OpenRouter
-// Nemotron). Matches the provider ids the backend's /providers endpoint returns.
-export type ModelProvider = 'llama' | 'nvidia';
+// Nemotron, 'local' = on-device Gemma via Ollama). Matches the provider ids the
+// backend's /providers endpoint returns.
+export type ModelProvider = 'llama' | 'nvidia' | 'local';
 
 export interface ProviderInfo {
   id: ModelProvider;

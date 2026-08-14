@@ -19,6 +19,7 @@ import {
 } from './lib/api';
 import RecipeCard from './components/RecipeCard';
 import AssistantPanel from './components/AssistantPanel';
+import ModelSelector from './components/ModelSelector';
 import Waveform from './components/Waveform';
 import TimerWidget from './components/TimerWidget';
 import Auth from './components/Auth';
@@ -533,15 +534,22 @@ export default function App() {
       }, 500);
     }
 
-    // Auto-start recording mic
+    // Ensure the voice session is live AND pointed at this recipe. If a
+    // discovery/home chat session is still open (e.g. you picked a card with the
+    // assistant open), we must retarget it to 'cooking' rather than skip — else
+    // it stays in 'home' context and cooking commands ("next step", timers) hit
+    // the wrong tools and appear dead. If nothing is running, start fresh.
+    const cookingState = {
+      screen: 'cooking',
+      recipe: selectedRecipe,
+      current_step: 0,
+      timers: timers.timers,
+      dietary_preferences: userProfile?.dietary_preferences || [],
+    };
     if (voice.status === 'idle') {
-      voice.start({
-        screen: 'cooking',
-        recipe: selectedRecipe,
-        current_step: 0,
-        timers: timers.timers,
-        dietary_preferences: userProfile?.dietary_preferences || []
-      }).catch((err) => console.error('Failed to start voice chat:', err));
+      voice.start(cookingState).catch((err) => console.error('Failed to start voice chat:', err));
+    } else {
+      voice.sendStateUpdate(cookingState);
     }
   };
 
@@ -1477,6 +1485,11 @@ export default function App() {
                   <div className="px-6 py-4 border-b border-[#2C2C24] bg-[#1A1A14] flex items-center justify-between text-[#A0A096] font-bold text-[11px] uppercase tracking-wider">
                     <span>Chat Drawer</span>
                     <span className="text-[9px] text-[#78786C] font-semibold bg-[#2C2C24] px-2 py-0.5 rounded-full">Keyboard Supported</span>
+                  </div>
+
+                  {/* Model selector — same picker as the home assistant, kept in sync */}
+                  <div className="px-6 py-3 border-b border-[#2C2C24] bg-[#1A1A14]/60">
+                    <ModelSelector value={voice.modelProvider} onChange={voice.setModelProvider} />
                   </div>
 
                   {/* Chat conversations area */}

@@ -68,6 +68,24 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "past_cooked_recipes",
+            "description": (
+                "List the recipes THIS user has cooked before (their own cooking history), "
+                "newest first. Use it for general chat about what they've made — 'what have I "
+                "cooked?', 'what did I make last week?', 'suggest something I've cooked before', "
+                "'cook that again'. General-chat/home tool only."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "description": "Max recipes to return (default 6)"}
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_recipe",
             "description": "Fetch a full recipe by id.",
             "parameters": {
@@ -183,7 +201,12 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
 # Tool subsets by screen. Offering only the relevant tools per screen trims the
 # tool-schema tokens sent on every request (and nudges the model toward the right
 # action). Inline-text tool recovery in agent.py still knows the full set.
-_HOME_TOOL_NAMES = {"search_recipes", "get_recipe", "select_recipe", "start_cooking", "import_recipe_from_url"}
+#
+# The two chats are deliberately separate: recipe DISCOVERY tools (search_recipes,
+# past_cooked_recipes) belong to the general/home chat ONLY, so the in-recipe
+# cooking chat can't wander off to search or list history — it stays focused on
+# guiding the current recipe.
+_HOME_TOOL_NAMES = {"search_recipes", "past_cooked_recipes", "get_recipe", "select_recipe", "start_cooking", "import_recipe_from_url"}
 _COOKING_TOOL_NAMES = {"get_current_step", "navigate_step", "set_timer", "cancel_timer"}
 
 
@@ -203,6 +226,9 @@ class ToolContext:
     llm_model: str
     # OpenAI-compatible chat endpoint (Groq by default; set from LLM_BASE_URL).
     llm_base_url: str = "https://api.groq.com/openai/v1/chat/completions"
+    # Request/response dialect: "openai" (Groq, OpenRouter) or "ollama" (local
+    # /api/chat). The agent branches on this; everything else stays shared.
+    api_style: str = "openai"
     # Per-provider request tweaks, set by main.py from the selected provider.
     # fallback_model: the "auto" sentinel means "use the agent's built-in Groq
     # fallback"; None means "no fallback" (e.g. OpenRouter has no cheap sibling
@@ -335,15 +361,19 @@ def build_system_prompt(cooking_state: dict[str, Any]) -> str:
     return (
         "You are ChefVoice, a hands-free kitchen voice assistant.\n"
         "Help the user find a recipe, then guide them through cooking it hands-free.\n"
-        "Your tools: search_recipes, get_recipe, select_recipe, import_recipe_from_url, "
-        "start_cooking, get_current_step, navigate_step, set_timer, cancel_timer. "
-        "You have no other abilities — you cannot scale recipes, convert units, suggest "
-        "substitutions, manage a shopping list, or save notes; if asked for those, say so briefly.\n"
+        "Your tools: search_recipes, past_cooked_recipes, get_recipe, select_recipe, "
+        "import_recipe_from_url, start_cooking, get_current_step, navigate_step, set_timer, cancel_timer. "
+        "You CAN suggest ingredient substitutions from your own cooking knowledge: if the user "
+        "asks what to use instead of an ingredient, give a sensible swap (with a rough amount) and "
+        "a quick note on how it changes the dish. You still cannot scale recipes, convert units, "
+        "manage a shopping list, or save notes; if asked for those, say so briefly.\n"
         "You do NOT have the recipe catalog memorized. To find, recommend, or name ANY recipe "
         "you MUST call the search_recipes tool first, and only mention recipes it returns — "
         "never invent recipe names or answer recipe requests from your own knowledge. "
         "When the user describes a dish or asks for ideas (screen 'home' or 'detail'), call "
-        "search_recipes, then read back the top suggestions by name so they can pick one to cook.\n"
+        "search_recipes, then read back the top suggestions by name so they can pick one to cook. "
+        "To answer what the user has cooked before, or to recommend from their history, call "
+        "past_cooked_recipes (available in general chat only).\n"
         "ALWAYS take actions by calling the provided tools/functions through the tool-calling "
         "mechanism. To move between steps you MUST call the navigate_step tool — never just "
         "describe the move. To start a timer, call set_timer. Do not act by writing text.\n"
@@ -385,6 +415,35 @@ async def tool_search_recipes(args: dict, ctx: ToolContext) -> dict:
         "params": {"query": query, "results": results},
     })
     return {"query": query, "results": slim}
+
+
+async def tool_past_cooked_recipes(args: dict, ctx: ToolContext) -> dict:
+    """The user's cooking history (general-chat only). De-duped to most-recent per recipe."""
+    try:
+        limit = max(1, min(int(args.get("limit") or 6), 20))
+    except (TypeError, ValueError):
+        limit = 6
+    history = db.list_cooking_history(ctx.user_id)
+    slim = []
+    seen = set()
+    for entry in history:
+        recipe = entry.get("recipe") or {}
+        rid = recipe.get("id")
+        if not rid or rid in seen:
+            continue
+        seen.add(rid)
+        slim.append({
+            "id": rid,
+            "title": recipe.get("title"),
+            "cuisine": recipe.get("cuisine"),
+            "rating": entry.get("rating"),
+            "duration_minutes": entry.get("duration_minutes"),
+            "cooked_at": entry.get("completed_at"),
+        })
+        if len(slim) >= limit:
+            break
+    ctx.ui_actions.append({"type": "past_cooked_recipes", "params": {"results": slim}})
+    return {"count": len(slim), "recipes": slim}
 
 
 async def tool_get_recipe(args: dict, ctx: ToolContext) -> dict:
@@ -617,25 +676,41 @@ async def tool_import_recipe_from_url(args: dict, ctx: ToolContext) -> dict:
         "steps (array of {step, text, timer_duration, safety_alert}). "
         "timer_duration is seconds or null. safety_alert is string or null."
     )
-    body = {
-        "model": ctx.llm_model,
-        "messages": [
-            {"role": "system", "content": extract_prompt},
-            {"role": "user", "content": text},
-        ],
-        "temperature": 0.2,
-    }
-    headers = {
-        "Authorization": f"Bearer {ctx.llm_api_key}",
-        "Content-Type": "application/json",
-        **(ctx.extra_headers or {}),
-    }
-    if ctx.extra_body:
-        body.update(ctx.extra_body)
+    messages = [
+        {"role": "system", "content": extract_prompt},
+        {"role": "user", "content": text},
+    ]
+    if ctx.api_style == "ollama":
+        # Ollama native /api/chat: no auth, params under `options`, reply in
+        # `message.content`. extra_body carries top-level fields like think.
+        body = {
+            "model": ctx.llm_model,
+            "messages": messages,
+            "stream": False,
+            "options": {"temperature": 0.2},
+        }
+        headers = {"Content-Type": "application/json", **(ctx.extra_headers or {})}
+        if ctx.extra_body:
+            body.update(ctx.extra_body)
+    else:
+        body = {
+            "model": ctx.llm_model,
+            "messages": messages,
+            "temperature": 0.2,
+        }
+        headers = {
+            "Authorization": f"Bearer {ctx.llm_api_key}",
+            "Content-Type": "application/json",
+            **(ctx.extra_headers or {}),
+        }
+        if ctx.extra_body:
+            body.update(ctx.extra_body)
     try:
         nresp = await ctx.http_client.post(ctx.llm_base_url, headers=headers, json=body, timeout=60.0)
         nresp.raise_for_status()
-        content = nresp.json()["choices"][0]["message"]["content"].strip()
+        payload = nresp.json()
+        message = payload.get("message") if ctx.api_style == "ollama" else payload["choices"][0]["message"]
+        content = (message.get("content") or "").strip()
         content = re.sub(r"^```json\s*|\s*```$", "", content, flags=re.I | re.M).strip()
         recipe_data = json.loads(content)
     except Exception as e:
@@ -669,6 +744,7 @@ async def tool_import_recipe_from_url(args: dict, ctx: ToolContext) -> dict:
 
 TOOL_HANDLERS: dict[str, Callable] = {
     "search_recipes": tool_search_recipes,
+    "past_cooked_recipes": tool_past_cooked_recipes,
     "get_recipe": tool_get_recipe,
     "get_current_step": tool_get_current_step,
     "navigate_step": tool_navigate_step,

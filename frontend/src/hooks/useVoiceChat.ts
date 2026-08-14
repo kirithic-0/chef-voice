@@ -2,6 +2,43 @@ import { useState, useEffect, useRef } from 'react';
 import { Message, VoiceAction, ModelProvider } from '../types';
 import { getToken, getWsUrl } from '../lib/api';
 
+// Friendly, spoken-style label + emoji for a tool call, shown as a chip in the
+// chat so the user sees what the agent is doing (search, timer, step nav, …).
+function describeToolCall(name: string, args: any = {}): string {
+  const a = args || {};
+  switch (name) {
+    case 'search_recipes':
+      return a.query ? `🔍 Searching recipes for “${a.query}”` : '🔍 Searching recipes';
+    case 'past_cooked_recipes':
+      return '📖 Looking through what you’ve cooked';
+    case 'get_recipe':
+      return '📄 Pulling up the recipe';
+    case 'select_recipe':
+      return '✅ Opening that recipe';
+    case 'start_cooking':
+      return '👨‍🍳 Starting cook mode';
+    case 'import_recipe_from_url':
+      return '🌐 Importing that recipe';
+    case 'get_current_step':
+      return '📍 Checking the current step';
+    case 'navigate_step': {
+      const dir: Record<string, string> = {
+        next: '⏭️ Moving to the next step',
+        prev: '⏮️ Going back a step',
+        repeat: '🔁 Repeating this step',
+        goto: '↪️ Jumping to that step',
+      };
+      return dir[a.direction] || '↔️ Navigating steps';
+    }
+    case 'set_timer':
+      return a.label ? `⏱️ Setting a timer for ${a.label}` : '⏱️ Setting a timer';
+    case 'cancel_timer':
+      return a.label ? `🚫 Cancelling the ${a.label} timer` : '🚫 Cancelling the timer';
+    default:
+      return `⚙️ Running ${name}`;
+  }
+}
+
 export function useVoiceChat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isRecording, setIsRecording] = useState(false);
@@ -12,7 +49,8 @@ export function useVoiceChat() {
   const [interimTranscript, setInterimTranscript] = useState('');
   const [ttsMode, setTtsMode] = useState<'web_speech'>('web_speech');
   // Which LLM backend the agent uses this session ('llama' = Groq,
-  // 'nvidia' = OpenRouter Nemotron). Chosen in the assistant's opening menu.
+  // 'nvidia' = OpenRouter Nemotron, 'local' = on-device Gemma via Ollama).
+  // Chosen in the assistant's model selector.
   const [modelProvider, setModelProvider] = useState<ModelProvider>('llama');
   const [latestAction, setLatestAction] = useState<VoiceAction | null>(null);
   
@@ -278,6 +316,12 @@ export function useVoiceChat() {
           if (isAiSpeakingRef.current) {
             interruptAi();
           }
+        } else if (data.type === 'ai_tool_call') {
+          // Immersive: show a chip in the chat for each tool the agent runs.
+          setMessages((prev) => [
+            ...prev,
+            { id: `tool-${Date.now()}-${data.name}`, role: 'tool', text: describeToolCall(data.name, data.args) },
+          ]);
         } else if (data.type === 'ai_action') {
           console.log('Action received from AI:', data.action);
           setLatestAction(data.action);

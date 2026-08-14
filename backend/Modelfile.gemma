@@ -1,0 +1,20 @@
+# ChefVoice local LLM (the "Gemma" model-selector option).
+#
+# One-time import of the local GGUF into Ollama:
+#   ollama create chefvoice-gemma -f backend/Modelfile.gemma
+#
+# Then start/keep Ollama running (`ollama serve`) and pick "Gemma" in the
+# assistant's model selector. The model is a 26B MoE (~4B active/token) at
+# Q4_K_M (~16 GB); it won't fully fit a 12 GB GPU, so Ollama automatically
+# offloads the overflow layers to system RAM. Ollama reports this model as
+# tool- and thinking-capable; the agent sends `think: false` for fast, clean
+# spoken replies (its native tool-calling still works with thinking off).
+#
+# Update the FROM path if your GGUF lives elsewhere.
+FROM C:/models/google_gemma-4-26B-A4B-it-Q4_K_M.gguf
+
+# Modest context keeps KV-cache memory down so more layers fit in VRAM. The
+# voice agent only sends the system prompt + last few turns, so 8k is plenty.
+PARAMETER num_ctx 8192
+PARAMETER temperature 0.4
+PARAMETER stop "<end_of_turn>"

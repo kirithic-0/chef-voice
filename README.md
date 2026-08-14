@@ -17,7 +17,7 @@ Navigate cooking steps hands-free, set smart timers, ask questions about ingredi
 | **Spoken Responses** | The browser Web Speech API voices the assistant's replies — instant, and no cloud TTS key required. |
 | **Semantic Search (RAG)** | Recipes are embedded with `all-MiniLM-L6-v2` and ranked by NumPy cosine similarity for meaning-based search — type "spicy creamy curry" and get the right dishes without keyword matches. |
 | **Tool-Calling Agent** | A multi-round tool-calling loop over 15 server-side tools — search, step navigation, timers, recipe scaling, unit conversion, substitutions, shopping list, memory, and URL import. |
-| **Selectable LLM** | Pick the model from the assistant's opening menu: **Llama 3.3 70B** on Groq (fast, default) or **NVIDIA Nemotron 3 Nano** via OpenRouter. Both are OpenAI-compatible, so the agent loop is identical across them. |
+| **Selectable LLM** | Pick the model from the assistant's model selector: **Llama 3.3 70B** on Groq (fast, default), **NVIDIA Nemotron 3 Nano** via OpenRouter, or a fully **local Gemma 4 26B** served by [Ollama](https://ollama.com/) — no API key, runs on your own machine, and auto-splits across VRAM + RAM when it doesn't fit the GPU. Groq/OpenRouter are OpenAI-compatible; the local option speaks Ollama's native API (so its reasoning phase can be switched off for snappy replies), and the agent loop handles both. |
 | **Shopping List & Memory** | Ask the assistant to "add eggs to my list" or "remember I used less salt" — items and notes persist per user and sync to the UI. |
 | **Recipe Import** | Paste a recipe URL (or ask by voice); the agent scrapes the page, extracts structured recipe JSON, embeds it, and adds it to the catalogue. |
 | **Speech-to-Text Input** | Deepgram `nova-2` streaming API provides sub-second, highly accurate transcription of continuous audio streams. |
@@ -35,6 +35,11 @@ Navigate cooking steps hands-free, set smart timers, ask questions about ingredi
 * API keys for the voice pipeline (optional — everything except the live voice assistant works without them):
   [Deepgram](https://deepgram.com/) (speech-to-text) and [Groq](https://console.groq.com/) (the default tool-calling agent).
   Optionally add an [OpenRouter](https://openrouter.ai/keys) key (`OPEN_API_KEY`) to enable the NVIDIA Nemotron option in the model selector. Text-to-speech uses the browser, so no TTS key is needed.
+* **Optional — local LLM:** to use the on-device **Gemma** option, install [Ollama](https://ollama.com/) and import your GGUF once (no API key needed):
+  ```bash
+  ollama create chefvoice-gemma -f backend/Modelfile.gemma   # edit the FROM path to your .gguf
+  ```
+  Keep `ollama serve` running and pick **Gemma** in the model selector. A 26B model won't fully fit a 12 GB GPU, so Ollama offloads the overflow layers to system RAM automatically.
 
 There is **no database server to install** — the app creates a local SQLite file on first run.
 
@@ -95,7 +100,10 @@ There is **no database server to install** — the app creates a local SQLite fi
 | `GROQ_API_KEY` | Voice only | Groq API key for the default "Llama" agent ([console.groq.com/keys](https://console.groq.com/keys)) |
 | `OPEN_API_KEY` | Optional | OpenRouter key ([openrouter.ai/keys](https://openrouter.ai/keys)) — enables the "Nemotron" (NVIDIA) option in the model selector |
 | `OPENROUTER_MODEL` | Optional | Override the OpenRouter model (default `nvidia/nemotron-3-nano-30b-a3b:free`) |
-| `DEFAULT_MODEL_PROVIDER` | Optional | Provider used when the client sends none: `llama` (default) or `nvidia` |
+| `LOCAL_LLM_MODEL` | Optional | Ollama model name for the "Gemma" local option (default `chefvoice-gemma`) |
+| `LOCAL_LLM_BASE_URL` | Optional | Ollama native chat endpoint (default `http://localhost:11434/api/chat`) |
+| `OLLAMA_KEEP_ALIVE` | Optional | How long Ollama keeps the local model warm between turns (default `30m`) |
+| `DEFAULT_MODEL_PROVIDER` | Optional | Provider used when the client sends none: `llama` (default), `nvidia`, or `local` |
 | `JWT_SECRET` | Recommended | Secret for signing session tokens (use a long random string in production) |
 | `FRONTEND_ORIGIN` | Optional | Comma-separated allowed CORS origins (default `http://localhost:5173,http://127.0.0.1:5173`) |
 | `CHEFVOICE_DB` | Optional | Path to the SQLite file (default `backend/chefvoice.db`) |
@@ -121,7 +129,7 @@ There is **no database server to install** — the app creates a local SQLite fi
 | **NumPy** | In-process cosine-similarity vector search |
 | **PyJWT + bcrypt** | Self-hosted JWT authentication with hashed passwords |
 | **Deepgram** | Streaming Speech-to-Text (ASR) engine |
-| **Groq / OpenRouter** | Selectable OpenAI-compatible tool-calling LLM: Llama 3.3 70B (Groq) or NVIDIA Nemotron 3 Nano (OpenRouter) |
+| **Groq / OpenRouter / Ollama** | Selectable tool-calling LLM: Llama 3.3 70B (Groq) or NVIDIA Nemotron 3 Nano (OpenRouter) over the OpenAI API, or a local Gemma 4 26B over Ollama's native API |
 
 #### Frontend
 | Technology | Purpose |

@@ -6,6 +6,18 @@ interface MessageBubbleProps {
 }
 
 export default function MessageBubble({ message }: MessageBubbleProps) {
+  // Tool-call chip: a small centered pill showing what the agent is doing
+  // (e.g. "🔍 Searching recipes…") so tool use is visible and immersive.
+  if (message.role === 'tool') {
+    return (
+      <div className="flex w-full justify-center my-1.5">
+        <div className="max-w-[85%] px-3.5 py-1.5 text-[12px] font-semibold text-[#5D7052] bg-[#5D7052]/10 border border-[#5D7052]/25 rounded-full flex items-center gap-1.5 shadow-sm">
+          {message.text}
+        </div>
+      </div>
+    );
+  }
+
   const isUser = message.role === 'user';
   return (
     <div className={`flex w-full ${isUser ? 'justify-end' : 'justify-start'} my-2`}>

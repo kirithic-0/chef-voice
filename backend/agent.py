@@ -33,6 +33,11 @@ MAX_TOOL_ROUNDS = 2
 TOOL_CALL_TIMEOUT = 25.0
 STREAM_TIMEOUT = 45.0
 
+# For the local Ollama provider (api_style="ollama"): how long Ollama keeps the
+# model resident after a request. A whole session's turns then reuse the warm
+# model (only the first turn pays the ~1-2 min cold load). Override via env.
+OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
+
 # Verbose agent tracing is off by default; enable with CHEFVOICE_DEBUG=1.
 DEBUG = os.getenv("CHEFVOICE_DEBUG", "").lower() in ("1", "true", "yes")
 
@@ -45,22 +50,42 @@ def _log(*args) -> None:
 SendJson = Callable[[dict], Awaitable[None]]
 
 
-async def _llm_chat(
-    http_client: Any,
+def _build_chat_request(
+    *,
+    api_style: str,
     api_key: str,
     model: str,
     messages: list[dict],
-    *,
-    chat_url: str = GROQ_CHAT_URL,
-    tools: Optional[list] = None,
-    tool_choice: Optional[str] = None,
-    stream: bool = False,
-    temperature: float = 0.4,
-    max_tokens: int = 512,
-    timeout: float = TOOL_CALL_TIMEOUT,
-    extra_headers: Optional[dict] = None,
-    extra_body: Optional[dict] = None,
-) -> Any:
+    tools: Optional[list],
+    tool_choice: Optional[str],
+    stream: bool,
+    temperature: float,
+    max_tokens: int,
+    extra_headers: Optional[dict],
+    extra_body: Optional[dict],
+) -> tuple[dict, dict]:
+    """Build (headers, body) for the target dialect. Returns OpenAI or Ollama shape."""
+    if api_style == "ollama":
+        # Ollama's native /api/chat: no auth, params under `options`, and
+        # `keep_alive` so the model stays warm between a session's turns.
+        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        if extra_headers:
+            headers.update(extra_headers)
+        body: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "stream": stream,
+            "keep_alive": OLLAMA_KEEP_ALIVE,
+            "options": {"temperature": temperature, "num_predict": max_tokens},
+        }
+        if tools is not None:
+            body["tools"] = tools
+        # Ollama has no `tool_choice` (it auto-decides). extra_body carries
+        # top-level fields like {"think": False}.
+        if extra_body:
+            body.update(extra_body)
+        return headers, body
+
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
@@ -68,7 +93,7 @@ async def _llm_chat(
     }
     if extra_headers:
         headers.update(extra_headers)
-    body: dict[str, Any] = {
+    body = {
         "model": model,
         "messages": messages,
         "temperature": temperature,
@@ -81,6 +106,46 @@ async def _llm_chat(
         body["tool_choice"] = tool_choice
     if extra_body:
         body.update(extra_body)
+    return headers, body
+
+
+def _extract_message(api_style: str, data: dict) -> dict:
+    """Pull the assistant message ({content, tool_calls, ...}) from a response."""
+    if api_style == "ollama":
+        return data.get("message") or {}
+    return (data.get("choices") or [{}])[0].get("message") or {}
+
+
+async def _llm_chat(
+    http_client: Any,
+    api_key: str,
+    model: str,
+    messages: list[dict],
+    *,
+    chat_url: str = GROQ_CHAT_URL,
+    api_style: str = "openai",
+    tools: Optional[list] = None,
+    tool_choice: Optional[str] = None,
+    stream: bool = False,
+    temperature: float = 0.4,
+    max_tokens: int = 512,
+    timeout: float = TOOL_CALL_TIMEOUT,
+    extra_headers: Optional[dict] = None,
+    extra_body: Optional[dict] = None,
+) -> Any:
+    headers, body = _build_chat_request(
+        api_style=api_style,
+        api_key=api_key,
+        model=model,
+        messages=messages,
+        tools=tools,
+        tool_choice=tool_choice,
+        stream=stream,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        extra_headers=extra_headers,
+        extra_body=extra_body,
+    )
 
     if stream:
         return http_client.stream("POST", chat_url, headers=headers, json=body, timeout=timeout)
@@ -96,6 +161,7 @@ async def _llm_chat_with_fallback(
     messages: list[dict],
     *,
     chat_url: str = GROQ_CHAT_URL,
+    api_style: str = "openai",
     fallback_model: Optional[str] = FALLBACK_MODEL,
     tools: Optional[list] = None,
     tool_choice: Optional[str] = None,
@@ -114,6 +180,7 @@ async def _llm_chat_with_fallback(
             active_model,
             messages,
             chat_url=chat_url,
+            api_style=api_style,
             tools=tools,
             tool_choice=tool_choice,
             temperature=temperature,
@@ -219,6 +286,7 @@ async def stream_final_text(
     send_json: SendJson,
     *,
     chat_url: str = GROQ_CHAT_URL,
+    api_style: str = "openai",
     max_tokens: int = 512,
     timeout: float = STREAM_TIMEOUT,
     extra_headers: Optional[dict] = None,
@@ -226,22 +294,19 @@ async def stream_final_text(
 ) -> str:
     """Stream final assistant tokens to the client as ai_text_partial, return full text."""
     full = []
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "Accept": "text/event-stream",
-    }
-    if extra_headers:
-        headers.update(extra_headers)
-    body: dict[str, Any] = {
-        "model": model,
-        "messages": messages,
-        "temperature": 0.4,
-        "max_tokens": max_tokens,
-        "stream": True,
-    }
-    if extra_body:
-        body.update(extra_body)
+    headers, body = _build_chat_request(
+        api_style=api_style,
+        api_key=api_key,
+        model=model,
+        messages=messages,
+        tools=None,
+        tool_choice=None,
+        stream=True,
+        temperature=0.4,
+        max_tokens=max_tokens,
+        extra_headers=extra_headers,
+        extra_body=extra_body,
+    )
     async with http_client.stream(
         "POST",
         chat_url,
@@ -256,6 +321,21 @@ async def stream_final_text(
         async for line in resp.aiter_lines():
             if not line:
                 continue
+            if api_style == "ollama":
+                # Ollama streams newline-delimited JSON objects (not SSE):
+                # {"message":{"content":"..."},"done":false} ... {"done":true}.
+                try:
+                    chunk = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                piece = (chunk.get("message") or {}).get("content") or ""
+                if piece:
+                    full.append(piece)
+                    await send_json({"type": "ai_text_partial", "text": piece})
+                if chunk.get("done"):
+                    break
+                continue
+            # OpenAI SSE: lines prefixed with "data:", terminated by [DONE].
             if line.startswith("data:"):
                 payload = line[5:].strip()
             else:
@@ -290,8 +370,9 @@ async def run_agent_turn(
     t0 = time.time()
     ctx.ui_actions.clear()
     chat_url = ctx.llm_base_url or GROQ_CHAT_URL
+    api_style = ctx.api_style or "openai"
     # The "auto" sentinel means "use the built-in Groq fallback"; an explicit
-    # None (e.g. OpenRouter) disables fallback; any other string is used as-is.
+    # None (e.g. OpenRouter, local) disables fallback; any other string is used as-is.
     fallback_model = FALLBACK_MODEL if ctx.fallback_model == "auto" else ctx.fallback_model
     extra_headers = ctx.extra_headers or None
     # extra_body is sent on tool-selection rounds; final_extra_body on the final
@@ -325,6 +406,7 @@ async def run_agent_turn(
             active_model,
             messages,
             chat_url=chat_url,
+            api_style=api_style,
             fallback_model=fallback_model,
             tools=active_tools,
             tool_choice="auto",
@@ -344,6 +426,7 @@ async def run_agent_turn(
                 active_model,
                 messages,
                 chat_url=chat_url,
+                api_style=api_style,
                 fallback_model=fallback_model,
                 tools=active_tools,
                 tool_choice="auto",
@@ -357,7 +440,7 @@ async def run_agent_turn(
             raise RuntimeError(f"LLM error {resp.status_code}: {resp.text[:800]}")
 
         data = resp.json()
-        message = (data.get("choices") or [{}])[0].get("message") or {}
+        message = _extract_message(api_style, data)
         tool_calls = message.get("tool_calls") or []
 
         if tool_calls:
@@ -373,6 +456,8 @@ async def run_agent_turn(
                 args = _parse_tool_args(fn.get("arguments"))
                 call_id = call.get("id") or f"call_{name}"
                 _log(f"[agent] tool={name} args={args}")
+                # Surface the tool call in the UI (immersive "the agent is doing X").
+                await send_json({"type": "ai_tool_call", "name": name, "args": args})
                 result = await execute_tool(name, args, ctx)
                 # Emit UI actions produced by this tool so far
                 while ctx.ui_actions:
@@ -406,6 +491,7 @@ async def run_agent_turn(
                 "tool_calls": synthetic,
             })
             for i, (name, args) in enumerate(inline_calls):
+                await send_json({"type": "ai_tool_call", "name": name, "args": args})
                 result = await execute_tool(name, args, ctx)
                 while ctx.ui_actions:
                     action = ctx.ui_actions.pop(0)
@@ -440,6 +526,7 @@ async def run_agent_turn(
                 wrap_messages,
                 send_json,
                 chat_url=chat_url,
+                api_style=api_style,
                 max_tokens=max_tokens,
                 timeout=stream_timeout,
                 extra_headers=extra_headers,
@@ -453,14 +540,14 @@ async def run_agent_turn(
                 active_model,
                 wrap_messages,
                 chat_url=chat_url,
+                api_style=api_style,
                 max_tokens=max_tokens,
                 timeout=req_timeout,
                 extra_headers=extra_headers,
                 extra_body=final_extra_body,
             )
             resp.raise_for_status()
-            final_text = ((resp.json().get("choices") or [{}])[0].get("message") or {}).get("content") or ""
-            final_text = final_text.strip()
+            final_text = (_extract_message(api_style, resp.json()).get("content") or "").strip()
 
     # Final safety net: never let tool markup reach the user's ears/screen.
     final_text = _sanitize_spoken_text(final_text)

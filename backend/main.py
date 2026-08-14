@@ -387,6 +387,7 @@ async def import_recipe(req: ImportRequest, user: dict = Depends(get_current_use
             llm_api_key=provider["api_key"],
             llm_model=provider["model"],
             llm_base_url=provider["base_url"],
+            api_style=provider["api_style"],
             extra_headers=provider["extra_headers"],
             extra_body=provider["extra_body"],
         )
@@ -483,6 +484,7 @@ async def websocket_chat(client_ws: WebSocket):
             llm_api_key=provider["api_key"],
             llm_model=provider["model"],
             llm_base_url=provider["base_url"],
+            api_style=provider["api_style"],
             fallback_model=provider["fallback_model"],
             max_tokens=provider["max_tokens"],
             request_timeout=provider["request_timeout"],

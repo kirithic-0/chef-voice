@@ -30,8 +30,8 @@ def test_tool_definitions_are_the_trimmed_set():
     names = {t["function"]["name"] for t in tools.TOOL_DEFINITIONS}
     # The agent keeps recipe-discovery, cooking-flow, and timer tools...
     assert names == {
-        "search_recipes", "get_recipe", "select_recipe", "import_recipe_from_url",
-        "start_cooking", "get_current_step", "navigate_step",
+        "search_recipes", "past_cooked_recipes", "get_recipe", "select_recipe",
+        "import_recipe_from_url", "start_cooking", "get_current_step", "navigate_step",
         "set_timer", "cancel_timer",
     }
     # ...and the kitchen-helper / shopping-list / memory tools were removed.
@@ -40,6 +40,16 @@ def test_tool_definitions_are_the_trimmed_set():
         assert gone not in names
     # TOOL_HANDLERS stays in lockstep with the definitions.
     assert set(tools.TOOL_HANDLERS) == names
+
+
+def test_discovery_tools_are_general_chat_only():
+    """search_recipes + past_cooked_recipes belong to the home/general chat only;
+    the in-recipe cooking chat must not be offered them."""
+    home = {t["function"]["name"] for t in tools.tools_for_screen("home")}
+    cooking = {t["function"]["name"] for t in tools.tools_for_screen("cooking")}
+    assert {"search_recipes", "past_cooked_recipes"} <= home
+    assert "search_recipes" not in cooking
+    assert "past_cooked_recipes" not in cooking
 
 
 def test_set_timer_gives_distinct_default_labels():
