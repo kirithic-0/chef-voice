@@ -9,7 +9,7 @@ similarity over sentence-transformer embeddings.
 Design notes
 ------------
 * JSON columns: SQLite has no array/JSONB type, so list/dict fields
-  (`ingredients`, `steps`, `dietary`, `allergies`, `embedding`, ...) are stored as
+  (`ingredients`, `steps`, `dietary`, `embedding`, ...) are stored as
   JSON text and parsed back into Python objects on read. This keeps the JSON shape
   returned to the frontend identical to the old Supabase responses.
 * Vector search: the recipe catalogue is small, so a brute-force cosine similarity
@@ -47,8 +47,6 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE TABLE IF NOT EXISTS profiles (
     id                  TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-    allergies           TEXT NOT NULL DEFAULT '[]',   -- JSON array of strings
-    dietary_preferences TEXT NOT NULL DEFAULT '[]',   -- JSON array of strings
     is_admin            INTEGER NOT NULL DEFAULT 0,    -- 0 / 1 boolean
     created_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -208,8 +206,6 @@ def _recipe_to_dict(row: sqlite3.Row, include_embedding: bool = False) -> dict:
 def _profile_to_dict(row: sqlite3.Row) -> dict:
     return {
         "id": row["id"],
-        "allergies": json.loads(row["allergies"] or "[]"),
-        "dietary_preferences": json.loads(row["dietary_preferences"] or "[]"),
         "is_admin": bool(row["is_admin"]),
         "created_at": row["created_at"],
     }
@@ -248,15 +244,6 @@ def get_or_create_profile(user_id: str) -> dict:
         _execute("INSERT INTO profiles (id) VALUES (?)", (user_id,))
         row = _query_one("SELECT * FROM profiles WHERE id = ?", (user_id,))
     return _profile_to_dict(row)
-
-
-def update_profile(user_id: str, allergies: list[str], dietary_preferences: list[str]) -> dict:
-    get_or_create_profile(user_id)  # ensure the row exists
-    _execute(
-        "UPDATE profiles SET allergies = ?, dietary_preferences = ? WHERE id = ?",
-        (json.dumps(allergies), json.dumps(dietary_preferences), user_id),
-    )
-    return get_or_create_profile(user_id)
 
 
 def set_admin(user_id: str, is_admin: bool) -> dict:

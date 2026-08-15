@@ -322,7 +322,6 @@ def build_system_prompt(cooking_state: dict[str, Any]) -> str:
     current_step_idx = cooking_state.get("current_step", 0)
     screen = cooking_state.get("screen", "home")
     timers = cooking_state.get("timers", [])
-    dietary_prefs = cooking_state.get("dietary_preferences", [])
 
     recipe_context = "None"
     step_context = "None"
@@ -356,8 +355,6 @@ def build_system_prompt(cooking_state: dict[str, Any]) -> str:
             if current_step_idx - 1 >= 0:
                 step_context += f"\nPrevious (Step {current_step_idx}): {steps[current_step_idx - 1].get('text')}"
 
-    dietary_str = ", ".join(dietary_prefs) if dietary_prefs else "None"
-
     return (
         "You are ChefVoice, a hands-free kitchen voice assistant.\n"
         "Help the user find a recipe, then guide them through cooking it hands-free.\n"
@@ -389,7 +386,6 @@ def build_system_prompt(cooking_state: dict[str, Any]) -> str:
         f"Current Active Recipe Details:\n{recipe_context}\n"
         f"Current Active Cooking Step:\n{step_context}\n"
         f"Active Running Timers: {json.dumps(timers)}\n"
-        f"User Dietary Preferences: {dietary_str}\n"
     )
 
 

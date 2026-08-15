@@ -22,7 +22,6 @@ Navigate cooking steps hands-free, set smart timers, ask questions about ingredi
 | **Recipe Import** | Paste a recipe URL (or ask by voice); the agent scrapes the page, extracts structured recipe JSON, embeds it, and adds it to the catalogue. |
 | **Speech-to-Text Input** | Deepgram `nova-2` streaming API provides sub-second, highly accurate transcription of continuous audio streams. |
 | **Intelligent Timers** | Context-aware timer management (e.g., "set a timer for the pasta"). Timers are fully controllable via voice. |
-| **Proactive Dietary Alerts** | Persistent warning cards and altered voice prompts for allergens, based on per-user profiles stored locally. |
 | **Local Auth & Profiles** | Self-hosted JWT authentication (bcrypt-hashed passwords). Favorites, cooking history, ratings, and an admin recipe portal are all scoped per user. |
 
 ---
@@ -176,7 +175,7 @@ All REST endpoints require an `Authorization: Bearer <jwt>` header.
 | `/recipes/{id}` | `GET` | Fetch a specific recipe |
 | `/recipes` | `POST` | Create a recipe (admin only; embedding generated server-side) |
 | `/recipes/{id}` | `DELETE` | Delete a recipe (admin only) |
-| `/profile` | `GET` / `PUT` | Get or update the current user's profile (allergies, dietary preferences) |
+| `/profile` | `GET` | Get the current user's profile |
 | `/profile/admin` | `PUT` | Toggle the current user's admin flag |
 | `/favorites` | `GET` / `POST` | List or add favorites |
 | `/favorites/{recipe_id}` | `DELETE` | Remove a favorite |

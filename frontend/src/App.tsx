@@ -371,7 +371,6 @@ export default function App() {
       current_step: currentStep,
       timers: timers.timers,
       tts_mode: 'web_speech',
-      dietary_preferences: userProfile?.dietary_preferences || []
     });
   }, [view, selectedRecipe, currentStep, timers.timers, userProfile]);
 
@@ -488,7 +487,6 @@ export default function App() {
         recipe: null,
         current_step: 0,
         timers: timers.timers,
-        dietary_preferences: userProfile?.dietary_preferences || [],
       }).catch((err) => console.error('Failed to start assistant:', err));
     }
   };
@@ -544,7 +542,6 @@ export default function App() {
       recipe: selectedRecipe,
       current_step: 0,
       timers: timers.timers,
-      dietary_preferences: userProfile?.dietary_preferences || [],
     };
     if (voice.status === 'idle') {
       voice.start(cookingState).catch((err) => console.error('Failed to start voice chat:', err));

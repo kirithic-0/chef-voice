@@ -201,19 +201,6 @@ export async function getUserProfile(_userId: string): Promise<UserProfile> {
   return { ...data, email: null };
 }
 
-export async function updateUserProfile(
-  _userId: string,
-  allergies: string[],
-  dietaryPreferences: string[],
-): Promise<UserProfile> {
-  const response = await fetch(`${API_BASE_URL}/profile`, {
-    method: 'PUT',
-    headers: authHeaders(),
-    body: JSON.stringify({ allergies, dietary_preferences: dietaryPreferences }),
-  });
-  return parse(response, 'Failed to update profile');
-}
-
 export async function updateAdminStatus(_userId: string, isAdmin: boolean): Promise<UserProfile> {
   const response = await fetch(`${API_BASE_URL}/profile/admin`, {
     method: 'PUT',

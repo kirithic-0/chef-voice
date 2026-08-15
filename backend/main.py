@@ -69,11 +69,6 @@ class Credentials(BaseModel):
     password: str
 
 
-class ProfileUpdate(BaseModel):
-    allergies: list[str] = []
-    dietary_preferences: list[str] = []
-
-
 class AdminUpdate(BaseModel):
     is_admin: bool
 
@@ -246,11 +241,6 @@ def remove_recipe(recipe_id: str, user: dict = Depends(get_current_user)):
 @app.get("/profile")
 def get_profile(user: dict = Depends(get_current_user)):
     return db.get_or_create_profile(user["id"])
-
-
-@app.put("/profile")
-def put_profile(update: ProfileUpdate, user: dict = Depends(get_current_user)):
-    return db.update_profile(user["id"], update.allergies, update.dietary_preferences)
 
 
 @app.put("/profile/admin")
@@ -448,7 +438,6 @@ async def websocket_chat(client_ws: WebSocket):
         "current_step": 0,
         "timers": [],
         "tts_mode": "web_speech",
-        "dietary_preferences": []
     }
 
     history = []

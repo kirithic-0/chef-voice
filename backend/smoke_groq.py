@@ -83,8 +83,8 @@ def _recipe(n_steps=4):
     }
 
 
-HOME = {"screen": "home", "recipe": None, "current_step": 0, "timers": [], "dietary_preferences": []}
-COOKING = {"screen": "cooking", "recipe": _recipe(4), "current_step": 1, "timers": [], "dietary_preferences": []}
+HOME = {"screen": "home", "recipe": None, "current_step": 0, "timers": []}
+COOKING = {"screen": "cooking", "recipe": _recipe(4), "current_step": 1, "timers": []}
 COOKING_TIMERS = {
     **COOKING,
     "timers": [

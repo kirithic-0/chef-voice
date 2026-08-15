@@ -89,8 +89,6 @@ export interface VoiceAction {
 export interface UserProfile {
   id: string;
   email: string | null;
-  allergies: string[];
-  dietary_preferences: string[];
   is_admin?: boolean;
 }
 
