@@ -121,6 +121,17 @@ def get_conn() -> sqlite3.Connection:
             if _conn is None:
                 conn = sqlite3.connect(DB_PATH, check_same_thread=False)
                 conn.row_factory = sqlite3.Row
+                # Wait up to 5s for a held lock instead of failing instantly with
+                # "database is locked" — the default busy timeout is 0, so any
+                # concurrent access (a voice-session write overlapping a REST
+                # write, a second worker, an external reader) would otherwise
+                # abort a write and surface as e.g. "couldn't save cooking log".
+                conn.execute("PRAGMA busy_timeout = 5000;")
+                # WAL lets readers run concurrently with the single writer, which
+                # removes most reader/writer lock contention. synchronous=NORMAL is
+                # the safe, recommended durability pairing for WAL.
+                conn.execute("PRAGMA journal_mode = WAL;")
+                conn.execute("PRAGMA synchronous = NORMAL;")
                 conn.execute("PRAGMA foreign_keys = ON;")
                 conn.executescript(SCHEMA)
                 conn.commit()

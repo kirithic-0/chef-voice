@@ -39,7 +39,7 @@ export default function AssistantPanel({ voice, suggestions, onPick, onClose }: 
 
   return (
     <div className="fixed inset-x-0 bottom-0 z-50 flex justify-center sm:inset-x-auto sm:right-6 sm:bottom-6 pointer-events-none">
-      <div className="pointer-events-auto w-full sm:w-[26rem] max-w-full h-[70vh] sm:h-[32rem] bg-[#14140F] border border-[#2C2C24] rounded-t-3xl sm:rounded-3xl shadow-[0_20px_60px_-10px_rgba(0,0,0,0.6)] flex flex-col overflow-hidden">
+      <div className="pointer-events-auto w-full sm:w-[26rem] max-w-full h-[85vh] sm:h-[38rem] sm:max-h-[calc(100dvh-3rem)] bg-[#14140F] border border-[#2C2C24] rounded-t-3xl sm:rounded-3xl shadow-[0_20px_60px_-10px_rgba(0,0,0,0.6)] flex flex-col overflow-hidden">
         {/* Header */}
         <div className="px-5 py-4 border-b border-[#2C2C24] bg-[#1A1A14] flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -62,25 +62,27 @@ export default function AssistantPanel({ voice, suggestions, onPick, onClose }: 
           <ModelSelector value={voice.modelProvider} onChange={voice.setModelProvider} />
         </div>
 
-        {/* Conversation */}
-        <div className="flex-1 overflow-hidden relative">
-          {voice.messages.length === 0 && !voice.isAiThinking && (
-            <div className="absolute inset-0 flex items-center justify-center px-8 text-center pointer-events-none">
-              <p className="text-[#78786C] text-sm leading-relaxed">
-                Ask me for a recipe — try <span className="text-[#8BA67E] font-semibold">"something quick with pasta"</span> or <span className="text-[#8BA67E] font-semibold">"a healthy vegan dinner"</span>.
-              </p>
-            </div>
-          )}
+        {/* Conversation — min-h-0 lets this flex child shrink so its own
+            scroll works and the suggestions/input below never crush it away. */}
+        <div className="flex-1 min-h-0 overflow-hidden relative">
           <ChatArea
             messages={voice.messages}
             isAiThinking={voice.isAiThinking}
             interimTranscript={voice.interimTranscript}
+            emptyHint={
+              <div className="h-full flex items-center justify-center px-8 text-center">
+                <p className="text-[#78786C] text-sm leading-relaxed">
+                  Ask me for a recipe — try <span className="text-[#8BA67E] font-semibold">"something quick with pasta"</span> or <span className="text-[#8BA67E] font-semibold">"a healthy vegan dinner"</span>.
+                </p>
+              </div>
+            }
           />
         </div>
 
-        {/* Recipe suggestions */}
+        {/* Recipe suggestions — capped height with its own scroll so a long
+            list stays contained instead of pushing the conversation off-screen. */}
         {suggestions.length > 0 && (
-          <div className="border-t border-[#2C2C24] bg-[#1A1A14] px-4 py-3 max-h-44 overflow-y-auto">
+          <div className="shrink-0 border-t border-[#2C2C24] bg-[#1A1A14] px-4 py-3 max-h-36 overflow-y-auto">
             <p className="text-[9px] font-bold text-[#78786C] uppercase tracking-wider mb-2">Suggestions — tap to open</p>
             <div className="flex flex-col gap-2">
               {suggestions.map((r) => (

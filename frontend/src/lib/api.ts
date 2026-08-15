@@ -102,6 +102,13 @@ function authHeaders(): HeadersInit {
 
 async function parse(response: Response, fallbackMessage: string) {
   if (!response.ok) {
+    // An expired/invalid JWT (7-day lifetime) surfaces as 401. Clear the dead
+    // session so the app drops back to the sign-in screen instead of leaving the
+    // user stuck behind repeating generic errors. `logout()` notifies listeners.
+    if (response.status === 401) {
+      logout();
+      throw new Error('Your session has expired. Please sign in again.');
+    }
     const errData = await response.json().catch(() => ({}));
     throw new Error(errData.detail || fallbackMessage);
   }

@@ -10,6 +10,7 @@ import {
   removeFavorite,
   getCookingHistory,
   addCookingHistory,
+  saveConversation,
   createRecipe,
   deleteRecipe,
   importRecipeFromUrl,
@@ -17,6 +18,7 @@ import {
   onAuthChange,
   logout
 } from './lib/api';
+import { getPreferredVoice } from './lib/speech';
 import RecipeCard from './components/RecipeCard';
 import AssistantPanel from './components/AssistantPanel';
 import ModelSelector from './components/ModelSelector';
@@ -70,6 +72,10 @@ export default function App() {
   // Home-screen chat assistant (recipe discovery entry point)
   const [showAssistant, setShowAssistant] = useState(false);
   const [assistantSuggestions, setAssistantSuggestions] = useState<Recipe[]>([]);
+
+  // Offer to resume an in-progress cook found in localStorage after a reload.
+  const [resumeCook, setResumeCook] = useState<{ recipe: Recipe; step: number } | null>(null);
+  const resumeCheckedRef = React.useRef(false);
 
   // Admin form state
   const [adminTitle, setAdminTitle] = useState('');
@@ -379,12 +385,41 @@ export default function App() {
     if (!window.speechSynthesis) return;
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
-    const voices = window.speechSynthesis.getVoices();
-    const voiceObj = voices.find(v => v.lang.startsWith('en') && v.name.includes('Google')) || 
-                     voices.find(v => v.lang.startsWith('en')) || 
-                     null;
+    const voiceObj = getPreferredVoice();
     if (voiceObj) utterance.voice = voiceObj;
     window.speechSynthesis.speak(utterance);
+  };
+
+  // A short title for a saved discovery chat: the first thing the user asked.
+  const discoveryTitle = () => {
+    const firstUser = voice.messages.find((m) => m.role === 'user');
+    return firstUser ? firstUser.text.slice(0, 60) : 'Recipe chat';
+  };
+
+  // Persist the current voice transcript (minus tool chips) as a saved
+  // conversation, then tear the session down. Called at genuine end-of-session
+  // points so the History panel has something to show. Best-effort: reads the
+  // messages before voice.stop() clears them, and never blocks or throws.
+  const endVoiceSession = (title: string) => {
+    const msgs = voice.messages
+      .filter((m) => m.role !== 'tool')
+      .map((m) => ({ role: m.role, text: m.text }));
+    if (session?.user && msgs.length > 0) {
+      saveConversation(title || 'Voice session', msgs).catch((err) =>
+        console.error('Failed to save conversation:', err),
+      );
+    }
+    voice.stop();
+  };
+
+  // localStorage key holding an in-progress cook so it can be resumed after a reload.
+  const ACTIVE_COOK_KEY = 'chefvoice_active_cook';
+  const clearActiveCook = () => {
+    try {
+      localStorage.removeItem(ACTIVE_COOK_KEY);
+    } catch {
+      /* ignore */
+    }
   };
 
   // Handle voice actions received from LLM
@@ -494,7 +529,7 @@ export default function App() {
   const closeAssistant = () => {
     setShowAssistant(false);
     setAssistantSuggestions([]);
-    voice.stop();
+    endVoiceSession(discoveryTitle());
   };
 
   // Explicit user pick (grid card or an assistant suggestion): end discovery,
@@ -503,7 +538,7 @@ export default function App() {
     if (showAssistant) {
       setShowAssistant(false);
       setAssistantSuggestions([]);
-      voice.stop();
+      endVoiceSession(discoveryTitle());
     }
     handleSelectRecipe(recipe);
   };
@@ -521,9 +556,17 @@ export default function App() {
   };
 
   const handleStartCooking = () => {
+    // The discovery assistant (general AI) has its own floating panel and voice
+    // session. Cooking mode is a separate full-screen experience with its own
+    // agent context, so close the assistant before handing off.
+    if (showAssistant) {
+      setShowAssistant(false);
+      setAssistantSuggestions([]);
+    }
+
     setView('cooking');
     setCurrentStep(0);
-    
+
     // Auto-read first step
     if (selectedRecipe && selectedRecipe.steps.length > 0) {
       setTimeout(() => {
@@ -532,22 +575,24 @@ export default function App() {
       }, 500);
     }
 
-    // Ensure the voice session is live AND pointed at this recipe. If a
-    // discovery/home chat session is still open (e.g. you picked a card with the
-    // assistant open), we must retarget it to 'cooking' rather than skip — else
-    // it stays in 'home' context and cooking commands ("next step", timers) hit
-    // the wrong tools and appear dead. If nothing is running, start fresh.
+    // Always (re)establish a voice session dedicated to cooking so the recipe
+    // agent connects with a clean 'cooking' context. If a discovery/home session
+    // is still live, tear it down first — otherwise cooking would ride the stale
+    // 'home' socket, the backend never logs a connection for the recipe agent,
+    // and the handoff appears dead. The onclose guard in useVoiceChat makes this
+    // stop()->start() handoff safe (the old socket's close is ignored).
     const cookingState = {
       screen: 'cooking',
       recipe: selectedRecipe,
       current_step: 0,
       timers: timers.timers,
     };
-    if (voice.status === 'idle') {
-      voice.start(cookingState).catch((err) => console.error('Failed to start voice chat:', err));
-    } else {
-      voice.sendStateUpdate(cookingState);
+    if (voice.status !== 'idle') {
+      // A live session here is the discovery chat we're handing off from — save
+      // it before tearing it down so the conversation isn't lost.
+      endVoiceSession(discoveryTitle());
     }
+    voice.start(cookingState).catch((err) => console.error('Failed to start voice chat:', err));
   };
 
   const handleNextStep = () => {
@@ -591,6 +636,115 @@ export default function App() {
       voice.sendStateUpdate({ trigger_read: true });
     }
   };
+
+  // Resume a previously interrupted cook at the saved step.
+  const handleResumeCook = () => {
+    if (!resumeCook) return;
+    const { recipe, step } = resumeCook;
+    setResumeCook(null);
+
+    setSelectedRecipe(recipe);
+    const checks: Record<string, boolean> = {};
+    recipe.ingredients.forEach((i) => {
+      checks[i.name] = false;
+    });
+    setIngredientsChecked(checks);
+    const safeStep = Math.min(Math.max(step, 0), recipe.steps.length - 1);
+    setCurrentStep(safeStep);
+    setView('cooking');
+
+    if (recipe.steps[safeStep]) {
+      setTimeout(() => {
+        speakLocal(`Resuming ${recipe.title} at step ${safeStep + 1}. ${recipe.steps[safeStep].text}`);
+      }, 500);
+    }
+
+    const cookingState = {
+      screen: 'cooking',
+      recipe,
+      current_step: safeStep,
+      timers: timers.timers,
+    };
+    if (voice.status !== 'idle') {
+      voice.stop();
+    }
+    voice.start(cookingState).catch((err) => console.error('Failed to start voice chat:', err));
+  };
+
+  const handleDismissResume = () => {
+    setResumeCook(null);
+    clearActiveCook();
+  };
+
+  // Keyboard step navigation in cook mode: →/Space next, ← prev, R repeat.
+  // Ignored while typing in the chat drawer input so text entry still works.
+  useEffect(() => {
+    if (view !== 'cooking') return;
+
+    const onKey = (e: KeyboardEvent) => {
+      const el = document.activeElement as HTMLElement | null;
+      const tag = el?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || el?.isContentEditable) return;
+
+      switch (e.key) {
+        case 'ArrowRight':
+        case ' ':
+        case 'Spacebar':
+          e.preventDefault();
+          handleNextStep();
+          break;
+        case 'ArrowLeft':
+          e.preventDefault();
+          handlePrevStep();
+          break;
+        case 'r':
+        case 'R':
+          handleRepeatStep();
+          break;
+        default:
+          break;
+      }
+    };
+
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [view, currentStep, selectedRecipe]);
+
+  // Persist the in-progress cook so a reload can offer to resume it.
+  useEffect(() => {
+    if (view !== 'cooking' || !selectedRecipe) return;
+    try {
+      localStorage.setItem(
+        ACTIVE_COOK_KEY,
+        JSON.stringify({ recipeId: selectedRecipe.id, currentStep }),
+      );
+    } catch {
+      /* ignore */
+    }
+  }, [view, selectedRecipe, currentStep]);
+
+  // Once recipes + session are loaded, offer to resume a saved cook (once).
+  useEffect(() => {
+    if (resumeCheckedRef.current) return;
+    if (!session || recipes.length === 0) return;
+    resumeCheckedRef.current = true;
+
+    // Don't interrupt if the user is already mid-cook this session.
+    if (view === 'cooking') return;
+    try {
+      const raw = localStorage.getItem(ACTIVE_COOK_KEY);
+      if (!raw) return;
+      const saved = JSON.parse(raw) as { recipeId?: string; currentStep?: number };
+      const recipe = recipes.find((r) => r.id === saved.recipeId);
+      if (recipe && typeof saved.currentStep === 'number' && saved.currentStep > 0) {
+        setResumeCook({ recipe, step: saved.currentStep });
+      } else {
+        clearActiveCook();
+      }
+    } catch {
+      clearActiveCook();
+    }
+  }, [session, recipes, view]);
 
   const toggleIngredient = (name: string) => {
     setIngredientsChecked(prev => ({
@@ -641,6 +795,12 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-4">
+            <button
+              onClick={() => setShowHistoryPanel(true)}
+              className="text-sm font-bold px-4 py-2 rounded-full text-[#78786C] hover:text-[#2C2C24] bg-[#F0EBE5]/50 border border-[#DED8CF] hover:bg-[#F0EBE5] transition-all duration-300 cursor-pointer"
+            >
+              History
+            </button>
             <button
               onClick={() => setShowShoppingList(true)}
               className="text-sm font-bold px-4 py-2 rounded-full text-[#78786C] hover:text-[#2C2C24] bg-[#F0EBE5]/50 border border-[#DED8CF] hover:bg-[#F0EBE5] transition-all duration-300 cursor-pointer"
@@ -1294,7 +1454,8 @@ export default function App() {
                   <button
                     onClick={() => {
                       timers.clearAllTimers();
-                      voice.stop();
+                      clearActiveCook();
+                      endVoiceSession(`Cooking: ${selectedRecipe?.title ?? 'recipe'}`);
                       setView('detail');
                     }}
                     className="text-[#A0A096] hover:text-[#F3F4F1] p-3 rounded-full hover:bg-[#2C2C24] transition-colors cursor-pointer text-sm font-bold uppercase tracking-wider"
@@ -1490,8 +1651,8 @@ export default function App() {
                   </div>
 
                   {/* Chat conversations area */}
-                  <div className="flex-1 overflow-hidden">
-                    <ChatArea 
+                  <div className="flex-1 min-h-0 overflow-hidden">
+                    <ChatArea
                       messages={voice.messages} 
                       isAiThinking={voice.isAiThinking} 
                       interimTranscript={voice.interimTranscript} 
@@ -1597,6 +1758,34 @@ export default function App() {
         refreshKey={shoppingRefreshKey}
       />
 
+      {/* Resume-cooking prompt: offered once on load if a cook was left unfinished */}
+      {resumeCook && (
+        <div className="fixed inset-0 bg-[#1A1A14]/80 backdrop-blur-xl z-50 flex items-center justify-center p-4">
+          <div className="bg-[#2C2C24] border border-[#4A4A40] rounded-[2rem] p-8 max-w-sm w-full text-[#F3F4F1] shadow-float space-y-6 animate-in fade-in zoom-in-95 duration-300">
+            <div className="text-center">
+              <h3 className="text-2xl font-serif font-bold text-[#F3F4F1]">Resume cooking?</h3>
+              <p className="text-sm text-[#A0A096] mt-2 px-2 leading-relaxed">
+                You left <strong className="text-[#C18C5D] font-bold">{resumeCook.recipe.title}</strong> at step {resumeCook.step + 1}. Pick up where you left off?
+              </p>
+            </div>
+            <div className="flex flex-col gap-3">
+              <button
+                onClick={handleResumeCook}
+                className="w-full bg-[#5D7052] hover:bg-[#5D7052]/90 text-[#F3F4F1] font-bold py-3.5 rounded-full transition-all duration-300 cursor-pointer text-center text-sm shadow-soft active:scale-95 uppercase tracking-wider"
+              >
+                Resume at step {resumeCook.step + 1}
+              </button>
+              <button
+                onClick={handleDismissResume}
+                className="w-full bg-transparent border border-[#4A4A40] hover:border-[#78786C] text-[#A0A096] hover:text-[#F3F4F1] font-bold py-3.5 rounded-full transition-all duration-300 cursor-pointer text-center text-sm active:scale-95 uppercase tracking-wider"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Recipe Completion Star Rating Modal */}
       {showCompletionModal && selectedRecipe && (
         <div className="fixed inset-0 bg-[#1A1A14]/80 backdrop-blur-xl z-50 flex items-center justify-center p-4">
@@ -1653,7 +1842,8 @@ export default function App() {
                       await loadUserProfile(session.user.id);
                     }
                     timers.clearAllTimers();
-                    voice.stop();
+                    clearActiveCook();
+                    endVoiceSession(`Cooking: ${selectedRecipe?.title ?? 'recipe'}`);
                     setShowCompletionModal(false);
                     setView('home');
                   } catch (err) {

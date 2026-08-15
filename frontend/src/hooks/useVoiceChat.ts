@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Message, VoiceAction, ModelProvider } from '../types';
 import { getToken, getWsUrl } from '../lib/api';
+import { getPreferredVoice } from '../lib/speech';
 
 // Friendly, spoken-style label + emoji for a tool call, shown as a chip in the
 // chat so the user sees what the agent is doing (search, timer, step nav, …).
@@ -192,10 +193,7 @@ export function useVoiceChat() {
 
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
-    const voices = window.speechSynthesis.getVoices();
-    const voice = voices.find(v => v.lang.startsWith('en') && v.name.includes('Google')) || 
-                  voices.find(v => v.lang.startsWith('en')) || 
-                  null;
+    const voice = getPreferredVoice();
     if (voice) {
       utterance.voice = voice;
     }
@@ -367,6 +365,13 @@ export function useVoiceChat() {
       };
 
       ws.onclose = () => {
+        // Ignore close events from a socket that's already been replaced by a
+        // newer session (e.g. general assistant -> cooking hands off to a fresh
+        // WebSocket). Acting here would wipe the new session's analyser or kick
+        // off a reconnect with this old socket's stale state.
+        if (wsRef.current !== ws) {
+          return;
+        }
         console.log('WebSocket connection closed.');
         setAnalyser(null);
         if (!isStoppedManuallyRef.current) {

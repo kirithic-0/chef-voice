@@ -140,6 +140,12 @@ def get_current_user(request: Request) -> dict:
     user_id = payload.get("sub")
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid token payload")
+    # A token can be validly signed yet reference a user that no longer exists
+    # (e.g. the local DB was reseeded, leaving old browser sessions with dead
+    # ids). Reject it with 401 so the client re-authenticates, instead of letting
+    # every write fail later with an opaque foreign-key error.
+    if db.get_user_by_id(user_id) is None:
+        raise HTTPException(status_code=401, detail="Session no longer valid. Please sign in again.")
     return {"id": user_id, "username": payload.get("username")}
 
 
@@ -279,6 +285,12 @@ def get_history(user: dict = Depends(get_current_user)):
 
 @app.post("/history")
 def post_history(entry: HistoryCreate, user: dict = Depends(get_current_user)):
+    # cooking_history.recipe_id is a FK into recipes; a recipe_id that isn't in
+    # the catalog (e.g. an AI-suggested recipe that was never persisted) would
+    # otherwise blow up as a 500 IntegrityError. Fail clearly instead.
+    if db.get_recipe(entry.recipe_id) is None:
+        print(f"[history] rejected: recipe_id {entry.recipe_id!r} not found (user {user['id']})")
+        raise HTTPException(status_code=404, detail="That recipe no longer exists in the catalog.")
     return db.add_cooking_history(
         user["id"], entry.recipe_id, entry.duration_minutes, entry.rating
     )

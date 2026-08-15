@@ -33,6 +33,10 @@ export interface Timer {
   label: string;
   duration: number;
   timeLeft: number;
+  // Epoch ms when the timer fires. timeLeft is derived from this against the wall
+  // clock each tick, so backgrounding the tab (which throttles setInterval) never
+  // drifts or pauses the countdown.
+  endsAt: number;
   alarmPlayed: boolean;
 }
 

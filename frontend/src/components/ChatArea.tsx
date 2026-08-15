@@ -7,25 +7,38 @@ interface ChatAreaProps {
   messages: Message[];
   isAiThinking: boolean;
   interimTranscript: string;
+  // Optional custom empty-state hint. Pass `null` to render no placeholder
+  // (e.g. when the surrounding panel shows its own).
+  emptyHint?: React.ReactNode;
 }
 
-export default function ChatArea({ messages, isAiThinking, interimTranscript }: ChatAreaProps) {
+export default function ChatArea({ messages, isAiThinking, interimTranscript, emptyHint }: ChatAreaProps) {
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isAiThinking, interimTranscript]);
 
+  const isEmpty = messages.length === 0 && !isAiThinking && !interimTranscript;
+
+  // The scroll container fills its parent (h-full) and scrolls internally. It
+  // must NOT use justify-between/justify-center: on an overflowing flex column
+  // that clips the top messages and makes them unreachable. Messages flow from
+  // the top; the empty-state hint is centered only when there's nothing yet.
   return (
-    <div className="flex-1 overflow-y-auto px-4 py-6 md:px-8 space-y-4 max-w-3xl mx-auto w-full h-full flex flex-col justify-between relative z-10">
-      {messages.length === 0 && !isAiThinking && !interimTranscript ? (
-        <div className="my-auto flex flex-col items-center justify-center">
-          <p className="text-[#78786C] text-base md:text-lg text-center select-none font-sans bg-[#F0EBE5]/50 px-6 py-3 rounded-full">
-            Just speak out loud to chat, or type below
-          </p>
-        </div>
+    <div className="h-full overflow-y-auto px-4 py-6 md:px-8 relative z-10">
+      {isEmpty ? (
+        emptyHint === undefined ? (
+          <div className="h-full flex items-center justify-center">
+            <p className="text-[#78786C] text-sm md:text-base text-center select-none font-sans bg-[#F0EBE5]/50 px-6 py-3 rounded-full">
+              Just speak out loud to chat, or type below
+            </p>
+          </div>
+        ) : (
+          emptyHint
+        )
       ) : (
-        <div className="flex flex-col w-full">
+        <div className="flex flex-col w-full max-w-3xl mx-auto space-y-1">
           {messages.map((msg) => (
             <MessageBubble key={msg.id} message={msg} />
           ))}
