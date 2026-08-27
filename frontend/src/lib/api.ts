@@ -165,9 +165,32 @@ export async function fetchRecipes(): Promise<Recipe[]> {
   return parse(response, 'Failed to fetch recipes');
 }
 
-export async function searchRecipes(query: string): Promise<Recipe[]> {
+export interface SearchFilters {
+  is_veg?: boolean;
+  category?: string;
+  cuisine?: string;
+  difficulty?: string;
+  max_time?: number;
+  limit?: number;
+}
+
+/**
+ * Hybrid recipe search.
+ *
+ * Filters are sent to the server rather than applied to the results here. Narrowing a page of
+ * six results in the browser answers "which of these six are vegetarian?", which routinely
+ * left one or two cards on screen; the server instead ranks within the recipes that already
+ * match, so the page stays full.
+ */
+export async function searchRecipes(query: string, filters: SearchFilters = {}): Promise<Recipe[]> {
+  const params = new URLSearchParams({ query });
+  for (const [key, value] of Object.entries(filters)) {
+    if (value !== undefined && value !== null && value !== '') {
+      params.set(key, String(value));
+    }
+  }
   const response = await fetch(
-    `${API_BASE_URL}/recipes/search?query=${encodeURIComponent(query)}`,
+    `${API_BASE_URL}/recipes/search?${params.toString()}`,
     { headers: authHeaders() },
   );
   return parse(response, 'Failed to search recipes');

@@ -17,17 +17,17 @@ interface AssistantPanelProps {
     modelProvider: ModelProvider;
     setModelProvider: (p: ModelProvider) => void;
   };
-  suggestions: Recipe[];
   onPick: (recipe: Recipe) => void;
   onClose: () => void;
 }
 
 /**
  * Floating recipe-discovery assistant for the home/detail screens. The user
- * chats (voice or text), the agent calls search_recipes, and the results show
- * here as clickable suggestions that flow into the normal detail -> cooking path.
+ * chats (voice or text), the agent calls search_recipes, and the results render
+ * inline under the reply that found them (see ChatArea), flowing into the normal
+ * detail -> cooking path when tapped.
  */
-export default function AssistantPanel({ voice, suggestions, onPick, onClose }: AssistantPanelProps) {
+export default function AssistantPanel({ voice, onPick, onClose }: AssistantPanelProps) {
   const [textInput, setTextInput] = useState('');
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -39,7 +39,7 @@ export default function AssistantPanel({ voice, suggestions, onPick, onClose }: 
 
   return (
     <div className="fixed inset-x-0 bottom-0 z-50 flex justify-center sm:inset-x-auto sm:right-6 sm:bottom-6 pointer-events-none">
-      <div className="pointer-events-auto w-full sm:w-[26rem] max-w-full h-[85vh] sm:h-[38rem] sm:max-h-[calc(100dvh-3rem)] bg-[#14140F] border border-[#2C2C24] rounded-t-3xl sm:rounded-3xl shadow-[0_20px_60px_-10px_rgba(0,0,0,0.6)] flex flex-col overflow-hidden">
+      <div className="pointer-events-auto w-full sm:w-[34rem] max-w-full h-[90vh] sm:h-[min(46rem,calc(100dvh-3rem))] bg-[#14140F] border border-[#2C2C24] rounded-t-3xl sm:rounded-3xl shadow-[0_20px_60px_-10px_rgba(0,0,0,0.6)] flex flex-col overflow-hidden">
         {/* Header */}
         <div className="px-5 py-4 border-b border-[#2C2C24] bg-[#1A1A14] flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -69,6 +69,7 @@ export default function AssistantPanel({ voice, suggestions, onPick, onClose }: 
             messages={voice.messages}
             isAiThinking={voice.isAiThinking}
             interimTranscript={voice.interimTranscript}
+            onPickRecipe={onPick}
             emptyHint={
               <div className="h-full flex items-center justify-center px-8 text-center">
                 <p className="text-[#78786C] text-sm leading-relaxed">
@@ -78,33 +79,6 @@ export default function AssistantPanel({ voice, suggestions, onPick, onClose }: 
             }
           />
         </div>
-
-        {/* Recipe suggestions — capped height with its own scroll so a long
-            list stays contained instead of pushing the conversation off-screen. */}
-        {suggestions.length > 0 && (
-          <div className="shrink-0 border-t border-[#2C2C24] bg-[#1A1A14] px-4 py-3 max-h-36 overflow-y-auto">
-            <p className="text-[9px] font-bold text-[#78786C] uppercase tracking-wider mb-2">Suggestions — tap to open</p>
-            <div className="flex flex-col gap-2">
-              {suggestions.map((r) => (
-                <button
-                  key={r.id}
-                  onClick={() => onPick(r)}
-                  className="flex items-center justify-between gap-3 text-left bg-[#2C2C24] hover:bg-[#3A3A30] border border-[#4A4A40] rounded-xl px-4 py-2.5 transition-colors cursor-pointer active:scale-[0.98]"
-                >
-                  <span className="min-w-0">
-                    <span className="block text-[#F3F4F1] text-sm font-semibold truncate">{r.title}</span>
-                    <span className="block text-[#A0A096] text-[11px] font-medium truncate">
-                      {r.cuisine}{typeof r.time === 'number' ? ` • ${r.time} min` : ''}{r.difficulty ? ` • ${r.difficulty}` : ''}
-                    </span>
-                  </span>
-                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-4 h-4 text-[#8BA67E] shrink-0">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-                  </svg>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
 
         {/* Mic status + mute */}
         <div className="px-4 pt-3 bg-[#1A1A14] flex items-center gap-3">

@@ -1,0 +1,347 @@
+{
+  "_readme": [
+    "Golden set for ChefVoice retrieval evaluation.",
+    "",
+    "Judgments reference recipes by TITLE, not id: recipe ids are uuid4 and change on every",
+    "reseed, titles do not. evaluate.py resolves titles to ids at run time and fails loudly if a",
+    "title no longer exists in the catalog.",
+    "",
+    "Grades: 2 = the recipe the user clearly meant, 1 = a defensible alternative the user would",
+    "accept. nDCG uses these gains; Recall and MRR treat both as relevant.",
+    "",
+    "Queries with an EMPTY `relevant` map are noise probes: the correct answer is to return",
+    "nothing. They are scored separately as noise rejection, never folded into Recall/MRR/nDCG.",
+    "",
+    "STALENESS WARNING: this set is judged against the 15-recipe seed catalog. Importing recipes",
+    "invalidates it — a newly added recipe that should match a query below is not listed here, so",
+    "it scores as a false positive and depresses every metric. Re-judge affected queries, or",
+    "evaluate against a frozen snapshot, before trusting a comparison across catalog changes."
+  ],
+  "catalog_snapshot": "seed_recipes.json @ 15 recipes",
+  "queries": [
+    {
+      "id": "q01",
+      "query": "butter chicken",
+      "intent": "exact dish name",
+      "relevant": { "Classic Butter Chicken": 2 }
+    },
+    {
+      "id": "q02",
+      "query": "aglio e olio",
+      "intent": "exact dish name, rare tokens",
+      "relevant": { "Spaghetti Aglio e Olio": 2 }
+    },
+    {
+      "id": "q03",
+      "query": "chana masala",
+      "intent": "exact dish name",
+      "relevant": { "Chana Masala": 2 }
+    },
+    {
+      "id": "q04",
+      "query": "greek salad",
+      "intent": "exact dish name",
+      "relevant": { "Greek Salad": 2 }
+    },
+    {
+      "id": "q05",
+      "query": "mango sticky rice",
+      "intent": "exact dish name",
+      "relevant": { "Mango Sticky Rice": 2 }
+    },
+    {
+      "id": "q06",
+      "query": "brownies",
+      "intent": "short dish name",
+      "relevant": { "Fudgy Chocolate Brownies": 2, "Fudgy Chocolate Chip Cookies": 1 }
+    },
+    {
+      "id": "q07",
+      "query": "paneer tikka",
+      "intent": "partial dish name",
+      "relevant": { "Paneer Tikka Masala": 2 }
+    },
+    {
+      "id": "q08",
+      "query": "margherita pizza",
+      "intent": "partial dish name",
+      "relevant": { "Margherita Flatbread Pizza": 2 }
+    },
+
+    {
+      "id": "q09",
+      "query": "what can I make with chickpeas",
+      "intent": "ingredient lookup",
+      "relevant": { "Chana Masala": 2 }
+    },
+    {
+      "id": "q10",
+      "query": "recipes using paneer",
+      "intent": "ingredient lookup",
+      "relevant": { "Paneer Tikka Masala": 2 }
+    },
+    {
+      "id": "q11",
+      "query": "something with avocado",
+      "intent": "ingredient lookup",
+      "relevant": { "Grilled Chicken Power Bowl": 2 }
+    },
+    {
+      "id": "q12",
+      "query": "feta cheese and olives",
+      "intent": "ingredient lookup",
+      "relevant": { "Greek Salad": 2 }
+    },
+    {
+      "id": "q13",
+      "query": "I have quinoa and cucumber",
+      "intent": "ingredient lookup",
+      "relevant": { "Healthy Quinoa Salad": 2, "Greek Salad": 1 }
+    },
+    {
+      "id": "q14",
+      "query": "dishes with coconut milk",
+      "intent": "ingredient lookup",
+      "relevant": { "Mango Sticky Rice": 2 }
+    },
+    {
+      "id": "q15",
+      "query": "eggs and cheese for breakfast",
+      "intent": "ingredient lookup, vague",
+      "relevant": { "Quick Fluffy Pancakes": 2, "Classic Grilled Cheese": 1 }
+    },
+    {
+      "id": "q16",
+      "query": "leftover cold rice",
+      "intent": "ingredient lookup, indirect",
+      "relevant": { "Veggie Fried Rice": 2 }
+    },
+    {
+      "id": "q17",
+      "query": "dark chocolate dessert",
+      "intent": "ingredient plus category",
+      "relevant": { "Fudgy Chocolate Brownies": 2, "Fudgy Chocolate Chip Cookies": 1 }
+    },
+    {
+      "id": "q18",
+      "query": "soy sauce and sesame oil",
+      "intent": "ingredient lookup",
+      "relevant": { "Veggie Fried Rice": 2 }
+    },
+
+    {
+      "id": "q19",
+      "query": "vegan dinner",
+      "intent": "dietary — must exclude non-vegan",
+      "relevant": {
+        "Chana Masala": 2,
+        "Healthy Quinoa Salad": 2,
+        "Spaghetti Aglio e Olio": 2,
+        "Veggie Fried Rice": 2,
+        "Mango Sticky Rice": 1
+      }
+    },
+    {
+      "id": "q20",
+      "query": "gluten free dessert",
+      "intent": "dietary — the classic failure case",
+      "relevant": { "Mango Sticky Rice": 2 }
+    },
+    {
+      "id": "q21",
+      "query": "vegetarian pasta",
+      "intent": "dietary plus dish type",
+      "relevant": { "Creamy Tomato Basil Pasta": 2, "Spaghetti Aglio e Olio": 2 }
+    },
+    {
+      "id": "q22",
+      "query": "gluten free salad",
+      "intent": "dietary plus dish type",
+      "relevant": { "Greek Salad": 2, "Healthy Quinoa Salad": 2 }
+    },
+    {
+      "id": "q23",
+      "query": "meat free indian food",
+      "intent": "dietary plus cuisine",
+      "relevant": { "Chana Masala": 2, "Paneer Tikka Masala": 2 }
+    },
+    {
+      "id": "q24",
+      "query": "vegan dessert",
+      "intent": "dietary plus category",
+      "relevant": { "Mango Sticky Rice": 2 }
+    },
+
+    {
+      "id": "q25",
+      "query": "something ready in 10 minutes",
+      "intent": "time constraint",
+      "relevant": { "Classic Grilled Cheese": 2 }
+    },
+    {
+      "id": "q26",
+      "query": "quick meal under 20 minutes",
+      "intent": "time constraint",
+      "relevant": {
+        "Classic Grilled Cheese": 2,
+        "Quick Fluffy Pancakes": 2,
+        "Greek Salad": 2,
+        "Healthy Quinoa Salad": 2
+      }
+    },
+    {
+      "id": "q27",
+      "query": "a fast weeknight dinner",
+      "intent": "time constraint, vague",
+      "relevant": {
+        "Spaghetti Aglio e Olio": 2,
+        "Veggie Fried Rice": 2,
+        "Creamy Tomato Basil Pasta": 2,
+        "Classic Grilled Cheese": 1
+      }
+    },
+    {
+      "id": "q28",
+      "query": "I have an hour to cook something special",
+      "intent": "time constraint, inverted",
+      "relevant": {
+        "Mango Sticky Rice": 2,
+        "Classic Butter Chicken": 2,
+        "Fudgy Chocolate Brownies": 1
+      }
+    },
+
+    {
+      "id": "q29",
+      "query": "indian curry",
+      "intent": "cuisine",
+      "relevant": { "Classic Butter Chicken": 2, "Chana Masala": 2, "Paneer Tikka Masala": 2 }
+    },
+    {
+      "id": "q30",
+      "query": "italian pasta dish",
+      "intent": "cuisine plus dish type",
+      "relevant": { "Creamy Tomato Basil Pasta": 2, "Spaghetti Aglio e Olio": 2 }
+    },
+    {
+      "id": "q31",
+      "query": "thai dessert",
+      "intent": "cuisine plus category — cuisine is not stored today",
+      "relevant": { "Mango Sticky Rice": 2 }
+    },
+    {
+      "id": "q32",
+      "query": "mediterranean lunch",
+      "intent": "cuisine, vague",
+      "relevant": { "Greek Salad": 2, "Healthy Quinoa Salad": 1 }
+    },
+    {
+      "id": "q33",
+      "query": "chinese style rice",
+      "intent": "cuisine plus dish type",
+      "relevant": { "Veggie Fried Rice": 2 }
+    },
+
+    {
+      "id": "q34",
+      "query": "something comforting and cheesy",
+      "intent": "vague intent",
+      "relevant": {
+        "Classic Grilled Cheese": 2,
+        "Margherita Flatbread Pizza": 2,
+        "Creamy Tomato Basil Pasta": 1
+      }
+    },
+    {
+      "id": "q35",
+      "query": "healthy lunch",
+      "intent": "vague intent",
+      "relevant": {
+        "Healthy Quinoa Salad": 2,
+        "Greek Salad": 2,
+        "Grilled Chicken Power Bowl": 2
+      }
+    },
+    {
+      "id": "q36",
+      "query": "a sweet treat",
+      "intent": "vague intent",
+      "relevant": {
+        "Fudgy Chocolate Brownies": 2,
+        "Fudgy Chocolate Chip Cookies": 2,
+        "Mango Sticky Rice": 2
+      }
+    },
+    {
+      "id": "q37",
+      "query": "high protein meal",
+      "intent": "vague intent",
+      "relevant": { "Grilled Chicken Power Bowl": 2, "Classic Butter Chicken": 1, "Chana Masala": 1 }
+    },
+    {
+      "id": "q38",
+      "query": "spicy food",
+      "intent": "vague intent",
+      "relevant": {
+        "Spaghetti Aglio e Olio": 2,
+        "Paneer Tikka Masala": 2,
+        "Chana Masala": 1
+      }
+    },
+    {
+      "id": "q39",
+      "query": "easy breakfast",
+      "intent": "vague intent",
+      "relevant": { "Quick Fluffy Pancakes": 2, "Classic Grilled Cheese": 1 }
+    },
+    {
+      "id": "q40",
+      "query": "party snack for friends",
+      "intent": "vague intent",
+      "relevant": { "Margherita Flatbread Pizza": 2, "Fudgy Chocolate Chip Cookies": 1 }
+    },
+    {
+      "id": "q41",
+      "query": "baked goods with flour and butter",
+      "intent": "technique plus ingredient",
+      "relevant": { "Fudgy Chocolate Brownies": 2, "Fudgy Chocolate Chip Cookies": 2 }
+    },
+    {
+      "id": "q42",
+      "query": "one pan meal with vegetables",
+      "intent": "technique, vague",
+      "relevant": { "Veggie Fried Rice": 2, "Paneer Tikka Masala": 1 }
+    },
+
+    {
+      "id": "n01",
+      "query": "quantum blockchain algebra",
+      "intent": "noise — must return nothing",
+      "relevant": {}
+    },
+    {
+      "id": "n02",
+      "query": "how do I file my taxes",
+      "intent": "noise — must return nothing",
+      "relevant": {}
+    },
+    {
+      "id": "n03",
+      "query": "asdfghjkl qwerty",
+      "intent": "noise — must return nothing",
+      "relevant": {}
+    },
+    {
+      "id": "n04",
+      "query": "book a flight to tokyo",
+      "intent": "noise — must return nothing",
+      "relevant": {}
+    },
+    {
+      "id": "n05",
+      "query": "javascript async await tutorial",
+      "intent": "noise — must return nothing",
+      "relevant": {}
+    }
+  ]
+}

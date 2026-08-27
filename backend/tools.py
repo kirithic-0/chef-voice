@@ -15,6 +15,7 @@ from typing import Any, Callable, Optional
 from fastapi.concurrency import run_in_threadpool
 
 import database as db
+import retrieval
 
 # --- Unit conversion tables (kitchen) ---
 VOLUME_TO_ML = {
@@ -55,11 +56,25 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "search_recipes",
-            "description": "Semantic search over the recipe catalog. Use when the user wants to find or browse recipes.",
+            "description": (
+                "Hybrid semantic + keyword search over the recipe catalog. Use when the user "
+                "wants to find or browse recipes. Pass is_veg or max_time when the user states "
+                "such a constraint — they filter the catalog properly, which describing them "
+                "in the query text does not. Returns nothing when no recipe is a real match; "
+                "say so rather than inventing one."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Natural language search query"}
+                    "query": {"type": "string", "description": "Natural language search query"},
+                    "is_veg": {
+                        "type": "boolean",
+                        "description": "True for vegetarian only, false for non-vegetarian only. Omit if unstated.",
+                    },
+                    "max_time": {
+                        "type": "integer",
+                        "description": "Maximum total cooking time in minutes. Omit if unstated.",
+                    },
                 },
                 "required": ["query"],
             },
@@ -390,11 +405,24 @@ def build_system_prompt(cooking_state: dict[str, Any]) -> str:
 
 
 async def tool_search_recipes(args: dict, ctx: ToolContext) -> dict:
+    """The agent's recipe search. Same pipeline as the HTTP endpoint, no extra LLM hop.
+
+    Query normalization deliberately is NOT applied here. A voice turn is already
+    STT -> LLM decides to call this -> tool -> LLM composes the reply -> TTS; adding an LLM
+    rewrite inside the tool would make that two serial LLM round-trips per turn. It would also
+    be redundant, because the agent already passes a cleaned `query`.
+    """
     query = (args.get("query") or "").strip()
     if not query:
         return {"results": []}
-    query_embedding_arr = await run_in_threadpool(ctx.embedding_model.encode, query)
-    results = db.search_recipes(query_embedding_arr.tolist(), match_count=6)
+
+    filters = retrieval.Filters(
+        is_veg=args.get("is_veg"),
+        max_time=args.get("max_time"),
+    )
+    results = await run_in_threadpool(
+        lambda: retrieval.search(query, limit=6, filters=filters)
+    )
     slim = [
         {
             "id": r.get("id"),
@@ -402,6 +430,7 @@ async def tool_search_recipes(args: dict, ctx: ToolContext) -> dict:
             "cuisine": r.get("cuisine"),
             "time": r.get("time"),
             "difficulty": r.get("difficulty"),
+            "is_veg": r.get("is_veg"),
             "similarity": r.get("similarity"),
         }
         for r in results
@@ -647,6 +676,12 @@ async def tool_start_cooking(args: dict, ctx: ToolContext) -> dict:
 
 
 async def tool_import_recipe_from_url(args: dict, ctx: ToolContext) -> dict:
+    # Same admin gate as POST /recipes and POST /recipes/import: this writes to
+    # the shared catalogue. Gating only the HTTP endpoint would just move the
+    # bypass to the voice socket, which reaches this function directly.
+    if not db.is_admin(ctx.user_id):
+        return {"error": "Only an admin can import recipes into the catalogue."}
+
     url = (args.get("url") or "").strip()
     if not url.startswith("http"):
         return {"error": "url must be http(s)"}
@@ -717,21 +752,13 @@ async def tool_import_recipe_from_url(args: dict, ctx: ToolContext) -> dict:
         if field_name not in recipe_data:
             return {"error": f"Extracted recipe missing field: {field_name}"}
 
-    ingredients = recipe_data.get("ingredients", [])
-    ingredients_list = []
-    for ing in ingredients:
-        name = ing.get("name", "")
-        amount = ing.get("amount", "")
-        unit = ing.get("unit", "")
-        ingredients_list.append(f"{amount} {unit} {name}".strip())
-    ingredients_str = ", ".join(ingredients_list)
-    text_to_encode = (
-        f"Title: {recipe_data['title']}. Cuisine: {recipe_data['cuisine']}. "
-        f"Difficulty: {recipe_data['difficulty']}. Ingredients: {ingredients_str}."
-    )
-    embedding = (await run_in_threadpool(ctx.embedding_model.encode, text_to_encode)).tolist()
     recipe_data.setdefault("dietary", [])
     recipe_data.setdefault("image_url", "")
+    # Use db.build_recipe_text rather than assembling the document here: a second copy of the
+    # template drifts the moment the first one changes, and imported recipes would silently
+    # end up embedded differently from every other recipe in the catalog.
+    text_to_encode = db.build_recipe_text(recipe_data)
+    embedding = (await run_in_threadpool(ctx.embedding_model.encode, text_to_encode)).tolist()
 
     created = db.create_recipe(recipe_data, embedding)
     ctx.ui_actions.append({"type": "recipe_imported", "params": {"id": created.get("id"), "recipe": created}})

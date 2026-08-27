@@ -80,22 +80,27 @@ export default function ShoppingListPanel({ isOpen, onClose, refreshKey = 0 }: S
         ) : (
           <ul className="space-y-2">
             {items.map((item) => (
-              <li key={item.id} className="flex items-center gap-3 bg-white border border-[#E5E2D9] rounded-xl px-3 py-2">
+              // min-w-0 + break-words: a long unbroken item name is a single
+              // flex word, and without both it stretches the row far past the
+              // panel instead of wrapping (a 300-char item measured 2730px in a
+              // 448px panel). shrink-0 keeps Remove from being squeezed away.
+              <li key={item.id} className="flex items-start gap-3 bg-white border border-[#E5E2D9] rounded-xl px-3 py-2">
                 <input
                   type="checkbox"
+                  className="mt-1 shrink-0"
                   checked={item.checked}
                   onChange={async () => {
                     await patchShoppingListItem(item.id, { checked: !item.checked });
                     await load();
                   }}
                 />
-                <span className={`flex-1 text-sm ${item.checked ? 'line-through text-[#A0A096]' : 'text-[#2C2C24]'}`}>
+                <span className={`flex-1 min-w-0 break-words text-sm ${item.checked ? 'line-through text-[#A0A096]' : 'text-[#2C2C24]'}`}>
                   {item.quantity ? `${item.quantity} ` : ''}
                   {item.unit ? `${item.unit} ` : ''}
                   {item.name}
                 </span>
                 <button
-                  className="text-xs text-[#A85448] font-bold"
+                  className="text-xs text-[#A85448] font-bold shrink-0"
                   onClick={async () => {
                     await deleteShoppingListItem(item.id);
                     await load();

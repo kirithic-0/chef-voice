@@ -1,0 +1,30 @@
+{
+  "catalog_size": 15,
+  "catalog_snapshot": "seed_recipes.json @ 15 recipes",
+  "generated_at": "2026-08-27 01:07:18",
+  "rows": [
+    {
+      "config": "baseline",
+      "description": "dense-only brute-force cosine over JSON embeddings, fixed top-6, no threshold",
+      "queries_scored": 42,
+      "mrr": 0.8698412698412699,
+      "ndcg@5": 0.8179821578559947,
+      "recall@1": 0.8095238095238095,
+      "recall@3": 0.7698412698412699,
+      "recall@5": 0.8857142857142857,
+      "noise_rejection": 0.0,
+      "noise_correct": 0,
+      "noise_total": 5,
+      "latency_p50_ms": 7.995800002390752,
+      "latency_p95_ms": 8.979900001577334,
+      "failures": [
+        "  miss  q28 'I have an hour to cook something special' -> top was 'Quick Fluffy Pancakes'",
+        "  noise n01 'quantum blockchain algebra' returned 6 (top: Classic Grilled Cheese @ 0.139)",
+        "  noise n02 'how do I file my taxes' returned 6 (top: Quick Fluffy Pancakes @ 0.058)",
+        "  noise n03 'asdfghjkl qwerty' returned 6 (top: Fudgy Chocolate Brownies @ 0.125)",
+        "  noise n04 'book a flight to tokyo' returned 6 (top: Classic Butter Chicken @ 0.113)",
+        "  noise n05 'javascript async await tutorial' returned 6 (top: Fudgy Chocolate Brownies @ 0.072)"
+      ]
+    }
+  ]
+}

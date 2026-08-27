@@ -16,6 +16,7 @@ from sentence_transformers import SentenceTransformer
 import database as db
 import auth
 import providers
+import retrieval
 from agent import run_agent_turn
 from tools import ToolContext
 
@@ -27,8 +28,7 @@ load_dotenv()
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 
 # LLM provider is chosen per session by the client's model selector and resolved
-# via providers.resolve_provider() ("llama" = Groq, "nvidia" = OpenRouter
-# Nemotron). Both are OpenAI-compatible, so the agent loop is unchanged.
+# via providers.resolve_provider() ("llama" = Groq GPT-OSS, "local" = Ollama).
 
 # Comma-separated list of allowed frontend origins (defaults to the Vite dev server).
 FRONTEND_ORIGINS = [
@@ -58,6 +58,11 @@ embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 
 # Create the SQLite database and schema on startup.
 db.init_db()
+
+# Retrieval shares this process's model rather than loading a second copy, then builds the
+# embedding matrix up front so the first search of a session is not the slow one.
+retrieval.set_model(embedding_model)
+retrieval.warm()
 
 
 # --------------------------------------------------------------------------- #
@@ -209,11 +214,45 @@ def get_recipes(user: dict = Depends(get_current_user)):
 
 
 @app.get("/recipes/search")
-async def search_recipes(query: str, user: dict = Depends(get_current_user)):
-    if not query:
+async def search_recipes(
+    query: str,
+    limit: int = 6,
+    is_veg: bool | None = None,
+    category: str | None = None,
+    cuisine: str | None = None,
+    difficulty: str | None = None,
+    max_time: int | None = None,
+    dietary: str | None = None,
+    mode: str = "hybrid",
+    debug: bool = False,
+    user: dict = Depends(get_current_user),
+):
+    """Hybrid recipe search with metadata pre-filtering.
+
+    Filters are applied inside the pipeline, before top-k — not by the caller afterwards.
+    Post-filtering a fixed page of results is what made "quick lunch" + Non-Veg return a single
+    recipe out of six.
+    """
+    if not query.strip():
         return []
-    query_embedding = await run_in_threadpool(embedding_model.encode, query)
-    return db.search_recipes(query_embedding.tolist(), match_count=6)
+    filters = retrieval.Filters(
+        is_veg=is_veg,
+        category=category,
+        cuisine=cuisine,
+        difficulty=difficulty,
+        max_time=max_time,
+        # Comma-separated, ALL must be present: "Vegan,Gluten-free" means both tags.
+        dietary=[tag.strip() for tag in dietary.split(",") if tag.strip()] if dietary else None,
+    )
+    return await run_in_threadpool(
+        lambda: retrieval.search(
+            query,
+            limit=max(1, min(limit, 50)),
+            mode=mode if mode in ("hybrid", "dense") else "hybrid",
+            filters=filters,
+            debug=debug,
+        )
+    )
 
 
 @app.get("/recipes/{recipe_id}")
@@ -340,7 +379,8 @@ def patch_shopping_item(item_id: str, patch: ShoppingItemUpdate, user: dict = De
 
 @app.delete("/shopping-list/{item_id}")
 def delete_shopping_item(item_id: str, user: dict = Depends(get_current_user)):
-    db.delete_shopping_list_item(item_id, user["id"])
+    if not db.delete_shopping_list_item(item_id, user["id"]):
+        raise HTTPException(status_code=404, detail="Item not found")
     return {"status": "success"}
 
 
@@ -367,6 +407,11 @@ def post_memory(memory: MemoryCreate, user: dict = Depends(get_current_user)):
 
 @app.post("/recipes/import")
 async def import_recipe(req: ImportRequest, user: dict = Depends(get_current_user)):
+    # Importing writes into the shared, global recipe catalogue exactly like
+    # POST /recipes does, so it takes the same admin gate. Without this the admin
+    # check on POST /recipes was decorative: any user could add catalogue entries
+    # by going through the importer instead.
+    require_admin(user)
     # Recipe extraction uses the server's default LLM provider.
     provider = providers.resolve_provider(None)
     if not provider["api_key"]:

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Message, VoiceAction, ModelProvider } from '../types';
+import { Message, VoiceAction, ModelProvider, Recipe } from '../types';
 import { getToken, getWsUrl } from '../lib/api';
 import { getPreferredVoice } from '../lib/speech';
 
@@ -42,6 +42,12 @@ function describeToolCall(name: string, args: any = {}): string {
 
 export function useVoiceChat() {
   const [messages, setMessages] = useState<Message[]>([]);
+  // Recipes from the agent's search, waiting for the reply they belong to.
+  // search_recipes resolves (ai_action) BEFORE the model has composed its answer
+  // (ai_text), so results are parked here and attached to that answer when it
+  // lands. They are dropped at the start of every new user turn, so a reply can
+  // never inherit the previous question's results.
+  const pendingRecipesRef = useRef<Recipe[] | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [isAiSpeaking, setIsAiSpeaking] = useState(false);
@@ -50,7 +56,7 @@ export function useVoiceChat() {
   const [interimTranscript, setInterimTranscript] = useState('');
   const [ttsMode, setTtsMode] = useState<'web_speech'>('web_speech');
   // Which LLM backend the agent uses this session ('llama' = Groq,
-  // 'nvidia' = OpenRouter Nemotron, 'local' = on-device Gemma via Ollama).
+  // 'local' = on-device Gemma via Ollama).
   // Chosen in the assistant's model selector.
   const [modelProvider, setModelProvider] = useState<ModelProvider>('llama');
   const [latestAction, setLatestAction] = useState<VoiceAction | null>(null);
@@ -305,6 +311,7 @@ export function useVoiceChat() {
           }
         } else if (data.type === 'user_transcript') {
           setInterimTranscript('');
+          pendingRecipesRef.current = null;
           setMessages((prev) => [
             ...prev,
             { id: `user-${Date.now()}`, role: 'user', text: data.text },
@@ -324,9 +331,16 @@ export function useVoiceChat() {
           console.log('Action received from AI:', data.action);
           setLatestAction(data.action);
         } else if (data.type === 'ai_text') {
+          const found = pendingRecipesRef.current;
+          pendingRecipesRef.current = null;
           setMessages((prev) => [
             ...prev,
-            { id: `ai-${Date.now()}`, role: 'ai', text: data.text },
+            {
+              id: `ai-${Date.now()}`,
+              role: 'ai',
+              text: data.text,
+              ...(found && found.length ? { recipes: found } : {}),
+            },
           ]);
           setIsAiThinking(false);
           speakWebSpeech(data.text);
@@ -505,7 +519,16 @@ export function useVoiceChat() {
     };
   }, []);
 
+  /**
+   * Park recipes the agent just found so they attach to its next reply.
+   * Called by the search_recipes UI action, which fires before that reply exists.
+   */
+  const attachRecipes = (found: Recipe[]) => {
+    pendingRecipesRef.current = found.length ? found : null;
+  };
+
   return {
+    attachRecipes,
     messages,
     interimTranscript,
     isRecording,

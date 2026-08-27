@@ -41,3 +41,8 @@ backend/*.db
 .DS_Store
 Thumbs.db
 *.log
+
+# Claude Code local state (worktrees are full repo copies; settings are per-machine)
+.claude/worktrees/
+.claude/settings.local.json
+.claude/scheduled_tasks.lock

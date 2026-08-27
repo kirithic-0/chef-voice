@@ -4,14 +4,12 @@ import { fetchProviders } from '../lib/api';
 
 // Shown until /providers responds; keeps the selector usable offline too.
 const FALLBACK_PROVIDERS: ProviderInfo[] = [
-  { id: 'llama', label: 'Llama 3.3 70B (Groq)', model: '', available: true, default: true },
-  { id: 'nvidia', label: 'Nemotron 3 Nano (OpenRouter)', model: '', available: true, default: false },
+  { id: 'llama', label: 'GPT-OSS 120B (Groq)', model: '', available: true, default: true },
   { id: 'local', label: 'Gemma 4 26B (Local)', model: '', available: true, default: false },
 ];
 
 const SHORT_LABEL: Record<ModelProvider, string> = {
-  llama: 'Llama',
-  nvidia: 'Nemotron',
+  llama: 'Groq',
   local: 'Gemma',
 };
 
@@ -23,7 +21,7 @@ interface ModelSelectorProps {
 }
 
 /**
- * The LLM picker (Llama / Nemotron / Gemma). Shared by the home assistant panel
+ * The LLM picker (Groq / Gemma). Shared by the home assistant panel
  * and the in-recipe cooking chat drawer so both stay in sync — the selected
  * provider lives on the single useVoiceChat session, so switching here retargets
  * the live voice/text session on its next turn without reconnecting.

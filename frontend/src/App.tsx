@@ -43,8 +43,12 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCuisine, setSelectedCuisine] = useState('All');
   
-  // Advanced AI search toggle
-  const [useSemanticSearch, setUseSemanticSearch] = useState(false);
+  // Smart search: sends the typed query to the backend's hybrid pipeline (embeddings + keyword
+  // matching, fused) with the veg/category chips applied as real filters. Off falls back to
+  // plain substring matching over the already-loaded list, which is better when you know the
+  // exact name and want instant feedback.
+  const [useSemanticSearch, setUseSemanticSearch] = useState(true);
+  const [searching, setSearching] = useState(false);
 
   // Authentication & Profile states
   const [session, setSession] = useState<AppSession | null>(null);
@@ -56,7 +60,14 @@ export default function App() {
   const [sortBy, setSortBy] = useState<'default' | 'recent' | 'time' | 'rating'>('default');
   const [vegFilter, setVegFilter] = useState<'All' | 'Veg' | 'Non-Veg'>('All');
   const [showCompletionModal, setShowCompletionModal] = useState(false);
-  const [completionRating, setCompletionRating] = useState<number>(5);
+  // 0 = not rated yet. This used to default to 5, so anyone who hit "Submit &
+  // Save" without touching the stars silently recorded a five-star review — which
+  // is why every rated recipe in the catalogue sat at exactly 5.0 and the
+  // "Highest Rated" sort meant nothing. Rating is optional; 0 sends none.
+  const [completionRating, setCompletionRating] = useState<number>(0);
+  // Wall-clock ms when this cook began, so the history log records how long it
+  // actually took. Persisted with the resume state so it survives a reload.
+  const [cookStartedAt, setCookStartedAt] = useState<number | null>(null);
   
   // Modals / Panels
   const [showAuthModal, setShowAuthModal] = useState(false);
@@ -71,10 +82,9 @@ export default function App() {
   const [textInput, setTextInput] = useState('');
   // Home-screen chat assistant (recipe discovery entry point)
   const [showAssistant, setShowAssistant] = useState(false);
-  const [assistantSuggestions, setAssistantSuggestions] = useState<Recipe[]>([]);
 
   // Offer to resume an in-progress cook found in localStorage after a reload.
-  const [resumeCook, setResumeCook] = useState<{ recipe: Recipe; step: number } | null>(null);
+  const [resumeCook, setResumeCook] = useState<{ recipe: Recipe; step: number; startedAt?: number } | null>(null);
   const resumeCheckedRef = React.useRef(false);
 
   // Admin form state
@@ -292,42 +302,73 @@ export default function App() {
     }
   };
 
-  // Perform Semantic Vector Search via Backend
+  // Semantic search runs on the backend, and so do its filters. Re-running when vegFilter
+  // changes is the point: the server ranks within the recipes that match, instead of handing
+  // back a fixed six that we then whittle down to one or two.
   useEffect(() => {
-    if (!useSemanticSearch || !searchQuery.trim()) {
+    const query = searchQuery.trim();
+    // Below two characters there is nothing for either retriever to work with, and firing on
+    // the first keystroke just burns a request per letter.
+    if (!useSemanticSearch || query.length < 2) {
       setSearchResults([]);
+      setSearching(false);
       return;
     }
 
+    setSearching(true);
+    let cancelled = false;
+
     const delayDebounce = setTimeout(async () => {
       try {
-        const results = await searchRecipes(searchQuery);
-        setSearchResults(results);
+        const results = await searchRecipes(query, {
+          is_veg: vegFilter === 'All' ? undefined : vegFilter === 'Veg',
+          category: selectedCuisine === 'All' ? undefined : selectedCuisine,
+          limit: 12,
+        });
+        // A slow response for an old query must not overwrite a newer one.
+        if (!cancelled) setSearchResults(results);
       } catch (err) {
         console.error("Semantic search failed:", err);
+        if (!cancelled) setSearchResults([]);
+      } finally {
+        if (!cancelled) setSearching(false);
       }
-    }, 400);
+    }, 350);
 
-    return () => clearTimeout(delayDebounce);
-  }, [searchQuery, useSemanticSearch]);
+    return () => {
+      cancelled = true;
+      clearTimeout(delayDebounce);
+    };
+  }, [searchQuery, useSemanticSearch, vegFilter, selectedCuisine]);
 
-  // Filter recipes based on category, search query and Veg/Non-Veg filter
+  // Filter recipes based on category, search query and Veg/Non-Veg filter.
+  //
+  // Semantic results arrive already filtered by the server, so they are passed straight
+  // through. Only the plain browse list is filtered here.
   const displayRecipes = React.useMemo(() => {
-    let base = useSemanticSearch && searchQuery.trim() !== ''
-      ? searchResults
-      : recipes.filter((r) => {
-          const matchesCuisine = selectedCuisine === 'All' || r.cuisine === selectedCuisine;
-          const matchesSearch = 
-            r.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-            r.cuisine.toLowerCase().includes(searchQuery.toLowerCase()) ||
-            r.ingredients.some(i => i.name.toLowerCase().includes(searchQuery.toLowerCase()));
-          return matchesCuisine && matchesSearch;
-        });
+    // Must match the effect's condition exactly, or a one-character query renders an empty
+    // grid: the effect declines to search, and this branch has nothing to show.
+    const isSemantic = useSemanticSearch && searchQuery.trim().length >= 2;
+    if (isSemantic) return searchResults;
+
+    let base = recipes.filter((r) => {
+      const bucket = r.category ?? r.cuisine;
+      const matchesCuisine = selectedCuisine === 'All' || bucket === selectedCuisine;
+      const needle = searchQuery.toLowerCase();
+      const matchesSearch =
+        r.title.toLowerCase().includes(needle) ||
+        r.cuisine.toLowerCase().includes(needle) ||
+        bucket.toLowerCase().includes(needle) ||
+        r.ingredients.some(i => i.name.toLowerCase().includes(needle));
+      return matchesCuisine && matchesSearch;
+    });
 
     if (vegFilter !== 'All') {
       const targetIsVeg = vegFilter === 'Veg';
       base = base.filter(r => {
-        const isVeg = r.dietary?.some(d => d.toLowerCase() === 'veg' || d.toLowerCase() === 'vegan') ?? false;
+        // The server materializes is_veg; fall back to the tags only for older payloads.
+        const isVeg = r.is_veg
+          ?? (r.dietary?.some(d => d.toLowerCase() === 'veg' || d.toLowerCase() === 'vegan') ?? false);
         return targetIsVeg ? isVeg : !isVeg;
       });
     }
@@ -472,14 +513,21 @@ export default function App() {
         }
         break;
       case 'search_recipes':
+        // The assistant's results stay in the assistant. It used to also drive the
+        // browse grid — typing its query into the search box, forcing Smart search
+        // on, and clearing the category filter — which was both intrusive and
+        // wrong: writing to searchQuery tripped the debounced search effect, which
+        // then re-queried with its own limit and overwrote the grid with a
+        // DIFFERENT result set than the chat was showing. That is why asking for
+        // Italian listed two recipes in the chat and three in the menu.
+        //
+        // The two searches have different jobs anyway: the assistant answers a
+        // question, the grid is the user's own browsing state. Leave the grid alone.
         if (view !== 'cooking' && params?.query) {
-          setSearchQuery(params.query);
-          setUseSemanticSearch(true);
-          setSelectedCuisine('All');
           if (params.results && Array.isArray(params.results) && params.results.length > 0) {
-            setSearchResults(params.results as Recipe[]);
-            // Surface clickable suggestions inside the assistant panel.
-            setAssistantSuggestions(params.results as Recipe[]);
+            // Hand them to the voice hook, which attaches them to the reply the
+            // model is still composing, so each answer owns its own results.
+            voice.attachRecipes(params.results as Recipe[]);
           }
           if (!showAssistant) setView('home');
         }
@@ -528,7 +576,6 @@ export default function App() {
 
   const closeAssistant = () => {
     setShowAssistant(false);
-    setAssistantSuggestions([]);
     endVoiceSession(discoveryTitle());
   };
 
@@ -537,7 +584,6 @@ export default function App() {
   const handlePickRecipe = (recipe: Recipe) => {
     if (showAssistant) {
       setShowAssistant(false);
-      setAssistantSuggestions([]);
       endVoiceSession(discoveryTitle());
     }
     handleSelectRecipe(recipe);
@@ -561,11 +607,11 @@ export default function App() {
     // agent context, so close the assistant before handing off.
     if (showAssistant) {
       setShowAssistant(false);
-      setAssistantSuggestions([]);
     }
 
     setView('cooking');
     setCurrentStep(0);
+    setCookStartedAt(Date.now());
 
     // Auto-read first step
     if (selectedRecipe && selectedRecipe.steps.length > 0) {
@@ -606,7 +652,7 @@ export default function App() {
       }
     } else {
       // Show manual submission rating modal
-      setCompletionRating(5);
+      setCompletionRating(0);
       setShowCompletionModal(true);
       const finishText = `Congratulations! You have completed the recipe for ${selectedRecipe.title}. Please submit your rating.`;
       if (voice.status === 'idle') {
@@ -640,7 +686,7 @@ export default function App() {
   // Resume a previously interrupted cook at the saved step.
   const handleResumeCook = () => {
     if (!resumeCook) return;
-    const { recipe, step } = resumeCook;
+    const { recipe, step, startedAt } = resumeCook;
     setResumeCook(null);
 
     setSelectedRecipe(recipe);
@@ -652,6 +698,7 @@ export default function App() {
     const safeStep = Math.min(Math.max(step, 0), recipe.steps.length - 1);
     setCurrentStep(safeStep);
     setView('cooking');
+    setCookStartedAt(startedAt ?? Date.now());
 
     if (recipe.steps[safeStep]) {
       setTimeout(() => {
@@ -716,12 +763,12 @@ export default function App() {
     try {
       localStorage.setItem(
         ACTIVE_COOK_KEY,
-        JSON.stringify({ recipeId: selectedRecipe.id, currentStep }),
+        JSON.stringify({ recipeId: selectedRecipe.id, currentStep, startedAt: cookStartedAt }),
       );
     } catch {
       /* ignore */
     }
-  }, [view, selectedRecipe, currentStep]);
+  }, [view, selectedRecipe, currentStep, cookStartedAt]);
 
   // Once recipes + session are loaded, offer to resume a saved cook (once).
   useEffect(() => {
@@ -734,10 +781,10 @@ export default function App() {
     try {
       const raw = localStorage.getItem(ACTIVE_COOK_KEY);
       if (!raw) return;
-      const saved = JSON.parse(raw) as { recipeId?: string; currentStep?: number };
+      const saved = JSON.parse(raw) as { recipeId?: string; currentStep?: number; startedAt?: number };
       const recipe = recipes.find((r) => r.id === saved.recipeId);
       if (recipe && typeof saved.currentStep === 'number' && saved.currentStep > 0) {
-        setResumeCook({ recipe, step: saved.currentStep });
+        setResumeCook({ recipe, step: saved.currentStep, startedAt: saved.startedAt });
       } else {
         clearActiveCook();
       }
@@ -883,15 +930,41 @@ export default function App() {
                       <div className="relative flex-1 md:w-72">
                         <input
                           type="text"
-                          placeholder="Search by name or ingredients..."
+                          placeholder={useSemanticSearch ? "Try 'quick vegetarian pasta'…" : "Search by name or ingredients..."}
                           value={searchQuery}
                           onChange={(e) => setSearchQuery(e.target.value)}
-                          className="w-full bg-white/70 border border-[#DED8CF] rounded-full py-3.5 pl-12 pr-5 text-sm font-medium focus:outline-none focus:border-[#5D7052] focus:ring-2 focus:ring-[#5D7052]/20 transition-all shadow-sm text-[#2C2C24] placeholder-[#78786C]"
+                          className="w-full bg-white/70 border border-[#DED8CF] rounded-full py-3.5 pl-12 pr-11 text-sm font-medium focus:outline-none focus:border-[#5D7052] focus:ring-2 focus:ring-[#5D7052]/20 transition-all shadow-sm text-[#2C2C24] placeholder-[#78786C]"
                         />
                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5 text-[#78786C] absolute left-4 top-3.5">
                           <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                         </svg>
+                        {searching && (
+                          <span
+                            role="status"
+                            aria-label="Searching"
+                            className="absolute right-4 top-4 w-4 h-4 border-2 border-[#5D7052] border-t-transparent rounded-full animate-spin"
+                          />
+                        )}
                       </div>
+
+                      {/* Smart search sends the query to the hybrid retrieval pipeline; off is
+                          plain substring matching over the loaded list. */}
+                      <button
+                        type="button"
+                        onClick={() => setUseSemanticSearch(v => !v)}
+                        aria-pressed={useSemanticSearch}
+                        title={useSemanticSearch
+                          ? 'Smart search on — meaning + keywords, filtered on the server'
+                          : 'Smart search off — plain name and ingredient matching'}
+                        className={`flex items-center gap-2 px-4 py-3.5 rounded-full text-xs font-bold whitespace-nowrap shrink-0 border transition-colors cursor-pointer ${
+                          useSemanticSearch
+                            ? 'bg-[#5D7052] text-[#F3F4F1] border-[#5D7052] shadow-soft'
+                            : 'bg-white/60 text-[#78786C] border-[#DED8CF] hover:border-[#5D7052]/50 hover:bg-white'
+                        }`}
+                      >
+                        <span className={`w-1.5 h-1.5 rounded-full ${useSemanticSearch ? 'bg-[#F3F4F1]' : 'bg-[#78786C]'}`} />
+                        Smart
+                      </button>
                     </div>
                   </div>
 
@@ -900,12 +973,11 @@ export default function App() {
                     {['All', 'Indian', 'Italian', 'Quick Meals', 'Healthy', 'Desserts'].map(cuisine => (
                       <button
                         key={cuisine}
-                        onClick={() => {
-                          setSelectedCuisine(cuisine);
-                          setUseSemanticSearch(false); // disable semantic when clicking cuisines
-                        }}
+                        // Category is a real server-side filter now, so it composes with
+                        // semantic search instead of having to switch it off.
+                        onClick={() => setSelectedCuisine(cuisine)}
                         className={`px-5 py-2.5 rounded-full text-xs font-bold whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
-                          !useSemanticSearch && selectedCuisine === cuisine 
+                          selectedCuisine === cuisine
                             ? 'bg-[#5D7052] text-[#F3F4F1] shadow-soft' 
                             : 'bg-white/60 text-[#78786C] border border-[#DED8CF] hover:border-[#5D7052]/50 hover:bg-white'
                         }`}
@@ -951,7 +1023,12 @@ export default function App() {
                         onChange={(e) => setSortBy(e.target.value as any)}
                         className="bg-[#FEFEFA] border border-[#DED8CF] rounded-full px-4 py-2.5 text-xs font-bold text-[#2C2C24] focus:outline-none focus:border-[#5D7052] cursor-pointer shadow-sm appearance-none"
                       >
-                        <option value="default">Default (A-Z)</option>
+                        {/* "default" applies no client sort, so it preserves whatever order the
+                            server sent — alphabetical when browsing, relevance-ranked when
+                            searching. Any other option overrides the ranking. */}
+                        <option value="default">
+                          {useSemanticSearch && searchQuery.trim().length >= 2 ? 'Best match' : 'Default (A-Z)'}
+                        </option>
                         <option value="rating">Highest Rated</option>
                         <option value="time">Shortest Cooking Time</option>
                         <option value="recent">Recently Cooked</option>
@@ -966,7 +1043,16 @@ export default function App() {
                   <div className="text-center py-20 bg-white/40 border border-[#DED8CF] rounded-[2rem] shadow-sm backdrop-blur-sm">
                     <span className="text-5xl block mb-4 opacity-50">🔍</span>
                     <h3 className="font-serif font-bold text-[#2C2C24] text-xl">No recipes found</h3>
-                    <p className="text-[#78786C] text-sm mt-2">Try other search terms or toggle semantic search mode off.</p>
+                    {/* Smart search returns nothing when no recipe is a real match, rather than
+                        padding the page out with the least-bad options. Say which of the two
+                        knobs is responsible so the empty page is actionable. */}
+                    <p className="text-[#78786C] text-sm mt-2 max-w-md mx-auto">
+                      {useSemanticSearch && searchQuery.trim().length >= 2
+                        ? (vegFilter !== 'All' || selectedCuisine !== 'All')
+                          ? <>Nothing matched <strong className="text-[#2C2C24]">“{searchQuery.trim()}”</strong> within the current filters. Try clearing the {vegFilter !== 'All' ? `${vegFilter} ` : ''}{selectedCuisine !== 'All' ? `${selectedCuisine} ` : ''}filter, or rephrase.</>
+                          : <>Nothing in the catalogue is a close match for <strong className="text-[#2C2C24]">“{searchQuery.trim()}”</strong>. Try describing the dish differently.</>
+                        : 'Try other search terms, or clear the filters above.'}
+                    </p>
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-6">
@@ -1581,7 +1667,7 @@ export default function App() {
                       ) : (
                         <button
                           onClick={() => {
-                            setCompletionRating(5);
+                            setCompletionRating(0);
                             setShowCompletionModal(true);
                           }}
                           className="px-6 py-3 bg-gradient-to-r from-[#5D7052] to-[#4A5D40] hover:from-[#4A5D40] hover:to-[#364A2F] text-[#F3F4F1] rounded-full text-xs font-bold uppercase tracking-wider flex items-center gap-2 transition-all duration-300 active:scale-95 shadow-float cursor-pointer select-none animate-pulse"
@@ -1714,7 +1800,6 @@ export default function App() {
       {showAssistant && (
         <AssistantPanel
           voice={voice}
-          suggestions={assistantSuggestions}
           onPick={handlePickRecipe}
           onClose={closeAssistant}
         />
@@ -1806,7 +1891,10 @@ export default function App() {
                   <button
                     key={star}
                     type="button"
-                    onClick={() => setCompletionRating(star)}
+                    // Tapping the active star again clears the rating, so a
+                    // mis-tap does not force you to submit a score.
+                    onClick={() => setCompletionRating(r => (r === star ? 0 : star))}
+                    aria-label={`${star} star${star > 1 ? 's' : ''}`}
                     className={`text-4xl focus:outline-none transition-transform hover:scale-110 cursor-pointer bg-transparent border-none ${
                       star <= completionRating ? 'text-[#C18C5D] drop-shadow-md' : 'text-[#4A4A40]'
                     }`}
@@ -1816,6 +1904,7 @@ export default function App() {
                 ))}
               </div>
               <p className="text-sm text-[#C18C5D] font-bold h-5 uppercase tracking-wider">
+                {completionRating === 0 && <span className="text-[#A0A096]">Tap to rate — optional</span>}
                 {completionRating === 1 && 'Needs practice'}
                 {completionRating === 2 && 'It was okay'}
                 {completionRating === 3 && 'Tasted good!'}
@@ -1837,12 +1926,26 @@ export default function App() {
                 onClick={async () => {
                   try {
                     if (session?.user) {
-                      await addCookingHistory(session.user.id, selectedRecipe.id, selectedRecipe.time, completionRating);
+                      // Elapsed wall-clock minutes in cook mode, not
+                      // selectedRecipe.time — that was the recipe's advertised
+                      // duration, so a 30-second run still logged "40 mins".
+                      // Falls back to the advertised time if the start stamp is
+                      // missing (e.g. a cook resumed from an older session).
+                      const elapsedMinutes = cookStartedAt
+                        ? Math.max(1, Math.round((Date.now() - cookStartedAt) / 60000))
+                        : selectedRecipe.time;
+                      await addCookingHistory(
+                        session.user.id,
+                        selectedRecipe.id,
+                        elapsedMinutes,
+                        completionRating > 0 ? completionRating : undefined,
+                      );
                       // Reload profile to keep history in sync
                       await loadUserProfile(session.user.id);
                     }
                     timers.clearAllTimers();
                     clearActiveCook();
+                    setCookStartedAt(null);
                     endVoiceSession(`Cooking: ${selectedRecipe?.title ?? 'recipe'}`);
                     setShowCompletionModal(false);
                     setView('home');

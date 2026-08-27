@@ -29,10 +29,14 @@ def seed() -> None:
     with open(SEED_FILE, "r", encoding="utf-8") as f:
         recipes = json.load(f)
 
-    # Start from a clean catalogue so re-running does not create duplicates.
+    # Start from a clean catalogue so re-running does not create duplicates. The full-text
+    # index is cleared alongside the rows: it is a separate table, so dropping recipes without
+    # it would leave orphan entries that keep matching queries after their recipe is gone.
     conn = db.get_conn()
     conn.execute("DELETE FROM recipes")
+    conn.execute("DELETE FROM recipes_fts")
     conn.commit()
+    db.bump_index_version()
 
     print(f"Seeding {len(recipes)} recipes...")
     for idx, recipe in enumerate(recipes, start=1):

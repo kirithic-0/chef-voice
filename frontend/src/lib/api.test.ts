@@ -38,12 +38,49 @@ describe('ChefVoice API Client', () => {
 
     const query = 'spicy chicken';
     const results = await searchRecipes(query);
+    // URLSearchParams form-encodes the space as '+' rather than '%20'. Both are valid in a
+    // query string and the backend decodes them identically (verified against FastAPI).
     expect(mockFetch).toHaveBeenCalledWith(
-      `http://localhost:8000/recipes/search?query=${encodeURIComponent(query)}`,
+      'http://localhost:8000/recipes/search?query=spicy+chicken',
       { headers: jsonHeaders },
     );
     expect(results).toEqual(mockSearchResults);
     expect(results[0].title).toBe('Classic Butter Chicken');
+  });
+
+  it('searchRecipes should send filters to the server, not apply them locally', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => [] });
+
+    await searchRecipes('pasta', { is_veg: true, category: 'Italian', max_time: 30 });
+
+    const [url] = mockFetch.mock.calls[0];
+    const params = new URL(url).searchParams;
+    expect(params.get('query')).toBe('pasta');
+    expect(params.get('is_veg')).toBe('true');
+    expect(params.get('category')).toBe('Italian');
+    expect(params.get('max_time')).toBe('30');
+  });
+
+  it('searchRecipes should omit filters that are not set', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => [] });
+
+    await searchRecipes('pasta', { is_veg: undefined, category: '' });
+
+    const [url] = mockFetch.mock.calls[0];
+    const params = new URL(url).searchParams;
+    expect(params.has('is_veg')).toBe(false);
+    expect(params.has('category')).toBe(false);
+  });
+
+  it('searchRecipes should send is_veg=false rather than dropping it', async () => {
+    // `false` is a meaningful filter (show non-vegetarian only). A naive falsy check would
+    // silently turn "Non-Veg" into "no filter" and show everything.
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => [] });
+
+    await searchRecipes('curry', { is_veg: false });
+
+    const [url] = mockFetch.mock.calls[0];
+    expect(new URL(url).searchParams.get('is_veg')).toBe('false');
   });
 
   it('fetchRecipe should fetch a single recipe by ID', async () => {

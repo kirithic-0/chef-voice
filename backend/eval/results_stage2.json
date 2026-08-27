@@ -1,0 +1,45 @@
+{
+  "catalog_size": 15,
+  "catalog_snapshot": "seed_recipes.json @ 15 recipes",
+  "generated_at": "2026-08-27 01:48:20",
+  "rows": [
+    {
+      "config": "dense",
+      "description": "stage 1 \u2014 richer document text, cached matrix, score threshold",
+      "queries_scored": 42,
+      "mrr": 0.9067460317460317,
+      "ndcg@5": 0.8295630924254546,
+      "recall@1": 0.8809523809523809,
+      "recall@3": 0.8134920634920635,
+      "recall@5": 0.8634920634920635,
+      "noise_rejection": 1.0,
+      "noise_correct": 5,
+      "noise_total": 5,
+      "latency_p50_ms": 5.428700002084952,
+      "latency_p95_ms": 5.952999999863096,
+      "failures": [
+        "  miss  q28 'I have an hour to cook something special' -> top was 'Quick Fluffy Pancakes'",
+        "  miss  q34 'something comforting and cheesy' -> top was 'Healthy Quinoa Salad'"
+      ]
+    },
+    {
+      "config": "hybrid",
+      "description": "stage 2 \u2014 dense + FTS5 BM25 fused with RRF",
+      "queries_scored": 42,
+      "mrr": 0.9404761904761905,
+      "ndcg@5": 0.8666662028535923,
+      "recall@1": 0.9285714285714286,
+      "recall@3": 0.8888888888888888,
+      "recall@5": 0.8948412698412699,
+      "noise_rejection": 1.0,
+      "noise_correct": 5,
+      "noise_total": 5,
+      "latency_p50_ms": 5.55270000040764,
+      "latency_p95_ms": 6.271900001593167,
+      "failures": [
+        "  miss  q28 'I have an hour to cook something special' -> top was 'Quick Fluffy Pancakes'",
+        "  miss  q34 'something comforting and cheesy' -> top was 'Healthy Quinoa Salad'"
+      ]
+    }
+  ]
+}

@@ -9,8 +9,8 @@ tweaks differ. The local provider speaks Ollama's native /api/chat dialect
 because only Ollama's native endpoint honors `think: false`, letting us skip the
 model's reasoning phase for a fast, clean spoken reply.
 
-The frontend's model selector sends a provider key ("llama", "nvidia", or
-"local") in the voice-session state, and main.py resolves it here per turn.
+The frontend's model selector sends a provider key ("llama" or "local") in the
+voice-session state, and main.py resolves it here per turn.
 
 Keys and model overrides are read from the environment lazily (in
 resolve_provider) so they pick up whatever load_dotenv() populated at startup,
@@ -24,7 +24,6 @@ from typing import Optional
 from urllib.parse import urlparse
 
 GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
-OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
 # Ollama's native chat endpoint (NOT the /v1 OpenAI-compat one): only this
 # dialect honors `think: false`, which we need to skip the model's reasoning
 # phase for a snappy spoken reply.
@@ -45,14 +44,18 @@ def _first_env(*names: str) -> Optional[str]:
 _PROVIDERS: dict[str, dict] = {
     "llama": {
         "id": "llama",
-        "label": "Llama 3.3 70B (Groq)",
+        "label": "GPT-OSS 120B (Groq)",
         "api_style": "openai",
         "base_url": GROQ_CHAT_URL,
         "base_url_env": ("LLM_BASE_URL",),
-        "model": "llama-3.3-70b-versatile",
+        # Groq retired the Llama 3.x models this provider used to point at
+        # (llama-3.3-70b-versatile and llama-3.1-8b-instant both now 404 with a
+        # valid key). gpt-oss-120b is the current tool-calling model on Groq;
+        # verified to emit a proper tool_calls response for the agent loop.
+        "model": "openai/gpt-oss-120b",
         "model_env": ("GROQ_MODEL", "LLM_MODEL"),
         # Smaller/faster Groq sibling, used automatically on timeout or 5xx.
-        "fallback_model": "llama-3.1-8b-instant",
+        "fallback_model": "openai/gpt-oss-20b",
         "api_key_env": ("GROQ_API_KEY", "LLM_API_KEY"),
         # Spoken replies are short; a tight cap saves output tokens.
         "max_tokens": 300,
@@ -64,41 +67,6 @@ _PROVIDERS: dict[str, dict] = {
         # the final spoken-reply pass. Groq needs neither.
         "extra_body": {},
         "final_extra_body": {},
-    },
-    "nvidia": {
-        "id": "nvidia",
-        "label": "Nemotron 3 Nano (OpenRouter)",
-        "api_style": "openai",
-        "base_url": OPENROUTER_CHAT_URL,
-        "base_url_env": ("OPENROUTER_BASE_URL",),
-        # Free NVIDIA Nemotron 3 Nano 30B (A3B MoE) on OpenRouter: supports tools,
-        # 256k ctx, and — unlike the 550B Ultra — answers in ~1-3s and holds up
-        # under rapid repeated calls without the free-tier throttling/hangs that
-        # made Ultra unusable for a real-time voice loop.
-        "model": "nvidia/nemotron-3-nano-30b-a3b:free",
-        "model_env": ("OPENROUTER_MODEL",),
-        # OpenRouter has no cheap sibling wired up here — no auto-fallback.
-        "fallback_model": None,
-        "api_key_env": ("OPEN_API_KEY", "OPENROUTER_API_KEY"),
-        # Reasoning is off for the spoken reply, so a tight cap is plenty.
-        "max_tokens": 300,
-        # Fast model, but give the free tier a little more headroom than Groq.
-        "request_timeout": 45.0,
-        "stream_timeout": 60.0,
-        # Optional but recommended by OpenRouter for attribution / rankings.
-        "extra_headers": {
-            "HTTP-Referer": "http://localhost:5173",
-            "X-Title": "ChefVoice",
-        },
-        # Split reasoning by phase (see agent.run_agent_turn):
-        #  - extra_body (tool-selection rounds): reasoning ON — it's what makes
-        #    the model reliably CALL tools instead of just describing them.
-        #  - final_extra_body (spoken-reply pass): reasoning OFF — phrasing the
-        #    result needs no reasoning, and turning it off guarantees the CoT
-        #    never bleeds into the spoken text (this model sometimes dumps raw,
-        #    untagged reasoning into `content`, which no sanitizer can catch).
-        "extra_body": {"reasoning": {"enabled": True}},
-        "final_extra_body": {"reasoning": {"enabled": False}},
     },
     "local": {
         "id": "local",
@@ -138,12 +106,19 @@ _PROVIDERS: dict[str, dict] = {
 }
 
 # Friendly aliases the frontend (or an env default) may send.
+#
+# The OpenRouter/Nemotron provider was removed: its model slug
+# (nvidia/nemotron-3-nano-30b-a3b:free) stopped being free and now 404s. Its
+# aliases are kept, pointing at Groq, so a stale client or a leftover
+# DEFAULT_MODEL_PROVIDER=nvidia degrades to a working provider instead of
+# raising KeyError in resolve_provider().
 _ALIASES: dict[str, str] = {
     "llama": "llama",
     "groq": "llama",
-    "nvidia": "nvidia",
-    "nemotron": "nvidia",
-    "openrouter": "nvidia",
+    "gpt-oss": "llama",
+    "nvidia": "llama",
+    "nemotron": "llama",
+    "openrouter": "llama",
     "local": "local",
     "gemma": "local",
     "ollama": "local",
@@ -156,7 +131,7 @@ DEFAULT_PROVIDER = _ALIASES.get(
 
 
 def normalize_provider(name: Optional[str]) -> str:
-    """Map a client-supplied provider name to a canonical key ('llama'|'nvidia'|'local')."""
+    """Map a client-supplied provider name to a canonical key ('llama'|'local')."""
     if name:
         key = _ALIASES.get(str(name).strip().lower())
         if key:

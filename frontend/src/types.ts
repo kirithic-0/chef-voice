@@ -14,11 +14,16 @@ export interface Step {
 export interface Recipe {
   id: string;
   title: string;
+  /** The real cuisine (Indian, Thai, Mediterranean...). */
   cuisine: string;
+  /** The browse bucket shown as filter chips (Indian, Quick Meals, Healthy, Desserts...). */
+  category?: string;
   time: number;
   difficulty: string;
   servings: number;
   dietary?: string[];
+  /** Materialized server-side from `dietary` — do not re-derive it in the UI. */
+  is_veg?: boolean;
   image_url?: string;
   ingredients: Ingredient[];
   steps: Step[];
@@ -45,12 +50,15 @@ export interface Message {
   // 'tool' = an immersive chip shown while the agent runs a tool (e.g. searching).
   role: 'user' | 'ai' | 'tool';
   text: string;
+  // Recipes this particular reply found, rendered inline beneath it. Owning them
+  // per-message is what stops one answer's results lingering under the next one.
+  recipes?: Recipe[];
 }
 
-// Which LLM backend the voice agent uses ('llama' = Groq, 'nvidia' = OpenRouter
-// Nemotron, 'local' = on-device Gemma via Ollama). Matches the provider ids the
-// backend's /providers endpoint returns.
-export type ModelProvider = 'llama' | 'nvidia' | 'local';
+// Which LLM backend the voice agent uses ('llama' = Groq GPT-OSS, 'local' =
+// on-device Gemma via Ollama). Matches the provider ids the backend's
+// /providers endpoint returns.
+export type ModelProvider = 'llama' | 'local';
 
 export interface ProviderInfo {
   id: ModelProvider;

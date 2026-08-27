@@ -2,15 +2,14 @@ import os
 import tempfile
 import uuid
 
-# Configure an isolated database BEFORE importing the app.
-os.environ["CHEFVOICE_DB"] = os.path.join(tempfile.gettempdir(), "chefvoice_test.db")
+# Configure an isolated database BEFORE importing the app. conftest.py already did this for a
+# full-suite run; setdefault keeps this file runnable on its own without overriding conftest.
+os.environ.setdefault("CHEFVOICE_DB", os.path.join(tempfile.gettempdir(), "chefvoice_test.db"))
 os.environ.setdefault("JWT_SECRET", "test-secret-key-for-chefvoice-tests-0123456789")
 
-# Start each test session from a clean database file.
-try:
-    os.remove(os.environ["CHEFVOICE_DB"])
-except FileNotFoundError:
-    pass
+# Deleting the database file belongs in conftest.py, which runs before any test module opens a
+# connection. Doing it here breaks a full-suite run: an earlier-collected module has already
+# opened the file, and Windows refuses to unlink it (WinError 32).
 
 from fastapi.testclient import TestClient
 
