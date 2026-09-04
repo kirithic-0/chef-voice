@@ -1,27 +1,42 @@
 @import "tailwindcss";
 
+/* Warm Editorial. Paper while you browse; the warm-dark "ink" surface whenever
+   the mic is live (cooking mode, the assistant panel, the finish screen), so
+   "ChefVoice is listening" is a property of the surface rather than a badge. */
 @theme {
-  --color-background: #FDFCF8;
-  --color-foreground: #2C2C24;
-  
-  --color-primary: #5D7052;
-  --color-primary-foreground: #F3F4F1;
-  
-  --color-secondary: #C18C5D;
-  --color-secondary-foreground: #FFFFFF;
-  
-  --color-accent: #E6DCCD;
-  --color-accent-foreground: #4A4A40;
-  
-  --color-muted: #F0EBE5;
-  --color-muted-foreground: #78786C;
-  
-  --color-border: #DED8CF;
-  
+  --color-background: #FBF8F1;
+  --color-foreground: #211E19;
+
+  --color-primary: #46573F;
+  --color-primary-foreground: #FBF8F1;
+
+  --color-secondary: #B4643A;
+  --color-secondary-foreground: #FBF8F1;
+
+  --color-accent: #EAE3D4;
+  --color-accent-foreground: #4A4438;
+
+  --color-muted: #F2EDE3;
+  --color-muted-foreground: #6A6459;
+  --color-faint: #8A8378;
+
+  /* Two weights of rule: section borders and in-list separators. The design
+     leans on these instead of shadows and glass panels. */
+  --color-border: #E4DDD0;
+  --color-hairline: #EDE7DB;
+
   --color-destructive: #A85448;
 
-  --font-sans: 'Nunito', 'Quicksand', sans-serif;
-  --font-serif: 'Fraunces', serif;
+  /* Mic-live surface */
+  --color-ink: #191712;
+  --color-ink-foreground: #F4EFE7;
+  --color-ink-muted: #A29A88;
+  --color-ink-border: #2E2A22;
+  --color-clay: #C97A46;
+  --color-sage: #7E9270;
+
+  --font-sans: 'Karla', 'Helvetica Neue', Arial, sans-serif;
+  --font-serif: 'Instrument Serif', Georgia, 'Times New Roman', serif;
 
   --shadow-soft: 0 4px 20px -2px rgba(93, 112, 82, 0.15);
   --shadow-float: 0 10px 40px -10px rgba(193, 140, 93, 0.2);
@@ -40,20 +55,16 @@ body {
   min-height: 100vh;
 }
 
-/* Global grain texture overlay */
-body::after {
-  content: "";
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100vw;
-  height: 100vh;
-  pointer-events: none;
-  z-index: 9999;
-  opacity: 0.04;
-  mix-blend-mode: multiply;
-  /* Base64 noise pattern */
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+/* The grain overlay is gone: Warm Editorial gets its texture from hairline
+   rules and the serif, and the noise muddied both. */
+
+/* Horizontal strips (cuisine filters) scroll without showing a scrollbar. */
+.scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
 }
 
 .font-serif {

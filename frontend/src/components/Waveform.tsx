@@ -4,9 +4,13 @@ interface WaveformProps {
   status: 'idle' | 'connecting' | 'recording' | 'isAiThinking' | 'isAiSpeaking';
   analyser: AnalyserNode | null;
   muted?: boolean;
+  /** Sizing for the canvas box. Defaults to the full-width panel form. */
+  className?: string;
+  /** Hide the overlaid status caption when the surrounding UI already labels it. */
+  hideLabel?: boolean;
 }
 
-export default function Waveform({ status, analyser, muted = false }: WaveformProps) {
+export default function Waveform({ status, analyser, muted = false, className, hideLabel = false }: WaveformProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const animationRef = useRef<number | null>(null);
 
@@ -43,17 +47,17 @@ export default function Waveform({ status, analyser, muted = false }: WaveformPr
 
       let lines = 4;
       let amplitude = 10;
-      let color = '226, 232, 240'; // neutral slate
+      let color = '110, 104, 88'; // ink muted
       let speed = 0.08;
 
       if (muted) {
         // Mic is muted — show a flat, dim line regardless of live audio.
         amplitude = 2;
-        color = '160, 160, 150'; // muted gray
+        color = '110, 104, 88'; // ink muted
         lines = 2;
         phase += 0.02;
       } else if (status === 'recording') {
-        color = '239, 68, 68'; // red
+        color = '126, 146, 112'; // sage — listening
         lines = 5;
         phase += 0.12;
 
@@ -72,18 +76,18 @@ export default function Waveform({ status, analyser, muted = false }: WaveformPr
         }
       } else if (status === 'isAiThinking') {
         amplitude = 8 + Math.cos(phase) * 3;
-        color = '99, 102, 241'; // indigo
+        color = '162, 154, 136'; // ink muted — thinking
         lines = 3;
         phase += 0.04;
       } else if (status === 'isAiSpeaking') {
         amplitude = 25 + Math.sin(phase * 3) * 12;
-        color = '16, 185, 129'; // emerald
+        color = '201, 122, 70'; // clay — speaking
         lines = 6;
         phase += 0.16;
       } else {
         // idle
         amplitude = 2;
-        color = '115, 115, 115'; // neutral gray
+        color = '74, 68, 54'; // ink border — idle
         lines = 2;
         phase += 0.02;
       }
@@ -128,40 +132,25 @@ export default function Waveform({ status, analyser, muted = false }: WaveformPr
   }, [status, analyser, muted]);
 
   return (
-    <div className="w-full h-24 bg-neutral-950/20 rounded-2xl border border-neutral-800/10 overflow-hidden relative backdrop-blur-md">
+    <div className={`relative overflow-hidden ${className ?? 'w-full h-24'}`}>
       <canvas ref={canvasRef} className="w-full h-full block" />
-      <div className="absolute inset-0 flex items-center justify-center pointer-events-none select-none">
-        {muted && status === 'recording' && (
-          <span className="text-[11px] font-semibold tracking-wider text-amber-400 uppercase">
-            🔇 Mic Muted
+      {!hideLabel && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none select-none">
+          <span className="text-[11px] font-bold tracking-[0.14em] uppercase text-[#A29A88]">
+            {muted
+              ? 'Mic muted'
+              : status === 'recording'
+                ? 'Listening'
+                : status === 'isAiThinking'
+                  ? 'Thinking'
+                  : status === 'isAiSpeaking'
+                    ? 'Speaking'
+                    : status === 'connecting'
+                      ? 'Connecting'
+                      : 'Mic off'}
           </span>
-        )}
-        {!muted && status === 'recording' && (
-          <span className="text-[11px] font-semibold tracking-wider text-red-500 uppercase animate-pulse">
-            Listening Continuous
-          </span>
-        )}
-        {status === 'isAiThinking' && (
-          <span className="text-[11px] font-semibold tracking-wider text-indigo-400 uppercase animate-pulse">
-            Chef is thinking...
-          </span>
-        )}
-        {status === 'isAiSpeaking' && (
-          <span className="text-[11px] font-semibold tracking-wider text-emerald-400 uppercase animate-pulse">
-            Chef is speaking...
-          </span>
-        )}
-        {status === 'connecting' && (
-          <span className="text-[11px] font-semibold tracking-wider text-amber-400 uppercase animate-pulse">
-            Connecting...
-          </span>
-        )}
-        {status === 'idle' && (
-          <span className="text-[11px] font-semibold tracking-wider text-neutral-400 uppercase">
-            Mic Muted
-          </span>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

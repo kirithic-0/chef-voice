@@ -410,6 +410,71 @@ export default function App() {
     return displayRecipes;
   }, [displayRecipes, sortBy, cookingHistory]);
 
+  // Explore leads with one dish and grids the rest behind it.
+  const featureRecipe = sortedRecipes[0] ?? null;
+
+  // Latest cook date per recipe, formatted for the card badge.
+  const cookedDates = React.useMemo(() => {
+    const latest: Record<string, string> = {};
+    cookingHistory.forEach(entry => {
+      const current = latest[entry.recipe_id];
+      if (!current || new Date(entry.completed_at) > new Date(current)) {
+        latest[entry.recipe_id] = entry.completed_at;
+      }
+    });
+    const formatted: Record<string, string> = {};
+    Object.entries(latest).forEach(([id, iso]) => {
+      formatted[id] = new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    });
+    return formatted;
+  }, [cookingHistory]);
+
+  // How many times each recipe has been finished — drives the feature eyebrow.
+  const cookCounts = React.useMemo(() => {
+    const counts: Record<string, number> = {};
+    cookingHistory.forEach(entry => {
+      counts[entry.recipe_id] = (counts[entry.recipe_id] || 0) + 1;
+    });
+    return counts;
+  }, [cookingHistory]);
+
+  // One voice indicator for cooking mode to share between the header dot, the
+  // waveform and the mute control, so they can never disagree.
+  const voiceState = voice.isMuted
+    ? { label: 'Mic muted', color: '#A29A88' }
+    : voice.status === 'recording'
+      ? { label: 'Listening', color: '#7E9270' }
+      : voice.status === 'isAiThinking'
+        ? { label: 'Thinking', color: '#A29A88' }
+        : voice.status === 'isAiSpeaking'
+          ? { label: 'Speaking', color: '#C97A46' }
+          : voice.status === 'connecting'
+            ? { label: 'Connecting', color: '#C97A46' }
+            : { label: 'Mic off', color: '#6E6858' };
+
+  // Ingredients the current step actually mentions, matched on the first word
+  // of the ingredient name.
+  const stepIngredients = React.useMemo(() => {
+    if (!selectedRecipe) return [];
+    const text = selectedRecipe.steps[currentStep]?.text.toLowerCase() ?? '';
+    return selectedRecipe.ingredients.filter(ing =>
+      text.includes(ing.name.toLowerCase().split(' ')[0])
+    );
+  }, [selectedRecipe, currentStep]);
+
+  // Wall-clock minutes in cooking mode. Timers re-render every second when one
+  // is running, but a cook with no timer would otherwise show a frozen count.
+  const [nowTick, setNowTick] = useState(Date.now());
+  useEffect(() => {
+    if (view !== 'cooking' || !cookStartedAt) return;
+    setNowTick(Date.now());
+    const id = setInterval(() => setNowTick(Date.now()), 30000);
+    return () => clearInterval(id);
+  }, [view, cookStartedAt]);
+  const elapsedMinutes = cookStartedAt
+    ? Math.max(0, Math.floor((nowTick - cookStartedAt) / 60000))
+    : null;
+
   // Sync cooking state to backend WebSocket
   useEffect(() => {
     voice.sendStateUpdate({
@@ -601,7 +666,25 @@ export default function App() {
     setView('detail');
   };
 
-  const handleStartCooking = () => {
+  // `recipeArg` lets Explore start a cook in one tap without a detour through
+  // the detail screen. Reading state straight after setSelectedRecipe would see
+  // the stale value, so the caller hands the recipe in and everything below —
+  // the spoken step, the agent's cooking context — uses that local copy.
+  // Callers wired to onClick must call it as `() => handleStartCooking()`, or
+  // React passes the click event in as the recipe.
+  const handleStartCooking = (recipeArg?: Recipe) => {
+    const recipe = recipeArg ?? selectedRecipe;
+    if (!recipe) return;
+
+    if (recipeArg) {
+      setSelectedRecipe(recipeArg);
+      const checks: Record<string, boolean> = {};
+      recipeArg.ingredients.forEach(i => {
+        checks[i.name] = false;
+      });
+      setIngredientsChecked(checks);
+    }
+
     // The discovery assistant (general AI) has its own floating panel and voice
     // session. Cooking mode is a separate full-screen experience with its own
     // agent context, so close the assistant before handing off.
@@ -614,9 +697,9 @@ export default function App() {
     setCookStartedAt(Date.now());
 
     // Auto-read first step
-    if (selectedRecipe && selectedRecipe.steps.length > 0) {
+    if (recipe.steps.length > 0) {
       setTimeout(() => {
-        const text = `Let's start cooking ${selectedRecipe.title}. Step 1: ${selectedRecipe.steps[0].text}`;
+        const text = `Let's start cooking ${recipe.title}. Step 1: ${recipe.steps[0].text}`;
         speakLocal(text);
       }, 500);
     }
@@ -629,7 +712,7 @@ export default function App() {
     // stop()->start() handoff safe (the old socket's close is ignored).
     const cookingState = {
       screen: 'cooking',
-      recipe: selectedRecipe,
+      recipe,
       current_step: 0,
       timers: timers.timers,
     };
@@ -831,57 +914,77 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-[#FDFCF8] text-[#2C2C24] flex flex-col font-sans antialiased selection:bg-[#5D7052]/20 selection:text-[#5D7052]">
+    <div className="min-h-screen bg-[#FBF8F1] text-[#211E19] flex flex-col font-sans antialiased selection:bg-[#46573F]/15 selection:text-[#46573F]">
       {/* Header */}
       {view !== 'cooking' && (
-        <header className="bg-[#FEFEFA]/80 backdrop-blur-md border-b border-[#DED8CF]/30 py-4 px-8 sticky top-0 z-40 flex items-center justify-between shadow-soft">
-          <div className="flex items-center gap-3 cursor-pointer group" onClick={() => setView('home')}>
-            <span className="font-serif font-bold text-2xl tracking-tight text-[#2C2C24] group-hover:text-[#5D7052] transition-colors">
-              ChefVoice
-            </span>
-          </div>
+        <header className="sticky top-0 z-40 bg-[#FBF8F1] border-b border-[#E4DDD0] h-[72px] px-8 xl:px-20 flex items-center justify-between gap-6">
+          <button
+            onClick={() => setView('home')}
+            className="font-serif text-[27px] tracking-[-0.4px] text-[#211E19] hover:text-[#46573F] transition-colors cursor-pointer shrink-0"
+          >
+            ChefVoice
+          </button>
 
-          <div className="flex items-center gap-4">
+          <nav className="hidden md:flex items-center gap-[30px] text-sm">
             <button
-              onClick={() => setShowHistoryPanel(true)}
-              className="text-sm font-bold px-4 py-2 rounded-full text-[#78786C] hover:text-[#2C2C24] bg-[#F0EBE5]/50 border border-[#DED8CF] hover:bg-[#F0EBE5] transition-all duration-300 cursor-pointer"
+              onClick={() => setView('home')}
+              className={`cursor-pointer transition-colors pb-[3px] ${
+                view === 'home'
+                  ? 'font-bold text-[#211E19] border-b-[1.5px] border-[#B4643A]'
+                  : 'font-medium text-[#6A6459] hover:text-[#211E19]'
+              }`}
             >
-              History
+              Explore
             </button>
             <button
               onClick={() => setShowShoppingList(true)}
-              className="text-sm font-bold px-4 py-2 rounded-full text-[#78786C] hover:text-[#2C2C24] bg-[#F0EBE5]/50 border border-[#DED8CF] hover:bg-[#F0EBE5] transition-all duration-300 cursor-pointer"
+              className="font-medium text-[#6A6459] hover:text-[#211E19] transition-colors cursor-pointer"
             >
-              Shopping List
+              Shopping list
             </button>
-            {/* Admin Portal Toggle */}
+            <button
+              onClick={() => setShowHistoryPanel(true)}
+              className="font-medium text-[#6A6459] hover:text-[#211E19] transition-colors cursor-pointer"
+            >
+              History
+            </button>
+          </nav>
+
+          <div className="flex items-center gap-[18px] shrink-0">
             {userProfile?.is_admin && (
-              <button
-                onClick={() => setView(view === 'admin' ? 'home' : 'admin')}
-                className={`text-sm font-bold px-4 py-2 rounded-full transition-all duration-300 cursor-pointer flex items-center gap-2 active:scale-95 ${
-                  view === 'admin'
-                    ? 'bg-[#5D7052] text-[#F3F4F1] shadow-soft'
-                    : 'text-[#78786C] hover:text-[#2C2C24] bg-[#F0EBE5]/50 border border-[#DED8CF] hover:bg-[#F0EBE5]'
-                }`}
-              >
-                Admin Portal
-              </button>
+              <>
+                <button
+                  onClick={() => setView(view === 'admin' ? 'home' : 'admin')}
+                  className={`text-[11px] font-bold tracking-[0.13em] uppercase transition-colors cursor-pointer pb-[3px] ${
+                    view === 'admin'
+                      ? 'text-[#211E19] border-b-[1.5px] border-[#B4643A]'
+                      : 'text-[#6A6459] hover:text-[#211E19]'
+                  }`}
+                >
+                  Admin
+                </button>
+                <span className="w-px h-5 bg-[#E4DDD0]" />
+              </>
             )}
 
-            {/* Auth Trigger / Profile Trigger */}
             {session ? (
               <button
                 onClick={() => setShowProfilePanel(true)}
-                className="bg-[#F0EBE5]/50 border border-[#DED8CF] hover:border-[#5D7052]/50 text-[#78786C] hover:text-[#2C2C24] text-sm font-bold px-5 py-2.5 rounded-full transition-all duration-300 cursor-pointer flex items-center gap-2 hover:shadow-soft"
+                className="group flex items-center gap-2.5 cursor-pointer"
               >
-                My Profile
+                <span className="w-8 h-8 rounded-full bg-[#46573F] text-[#FBF8F1] text-[13px] font-bold flex items-center justify-center">
+                  {session.user.username.charAt(0).toUpperCase()}
+                </span>
+                <span className="hidden sm:inline text-sm font-medium text-[#211E19] group-hover:text-[#46573F] transition-colors">
+                  {session.user.username}
+                </span>
               </button>
             ) : (
               <button
                 onClick={() => setShowAuthModal(true)}
-                className="bg-[#5D7052] hover:bg-[#5D7052]/90 text-[#F3F4F1] text-sm font-bold px-5 py-2.5 rounded-full transition-all cursor-pointer active:scale-95 shadow-soft"
+                className="bg-[#46573F] text-[#FBF8F1] text-sm font-bold px-6 py-2.5 rounded-full cursor-pointer active:scale-[0.98] transition-transform"
               >
-                Sign In
+                Sign in
               </button>
             )}
           </div>
@@ -892,257 +995,333 @@ export default function App() {
       <main className="flex-1 flex flex-col">
         {loading ? (
           <div className="flex-1 flex items-center justify-center">
-            <div className="w-10 h-10 border-4 border-amber-500 border-t-transparent rounded-full animate-spin" />
+            <div className="w-9 h-9 border-2 border-[#46573F] border-t-transparent rounded-full animate-spin" />
           </div>
         ) : view === 'home' ? (
-          /* Home Screen view */
-          <div className="max-w-7xl w-full mx-auto px-6 py-16 flex-1 flex flex-col gap-16 relative">
-            {/* Background Blobs for Hero */}
-            <div className="absolute top-0 right-0 w-96 h-96 bg-[#5D7052]/10 blob-1 blur-3xl -z-10 animate-[spin_60s_linear_infinite]" />
-            <div className="absolute top-20 left-10 w-72 h-72 bg-[#C18C5D]/10 blob-2 blur-3xl -z-10 animate-[spin_40s_linear_infinite_reverse]" />
+          /* Explore. Type carries the hierarchy and hairlines do the dividing —
+             no glass panels, and the one filled pill on the page is the primary
+             action on the featured dish. */
+          <div className="w-full max-w-[1600px] mx-auto px-8 xl:px-20 flex-1 flex flex-col">
 
-            {/* Welcome banner */}
-            <div className="relative overflow-hidden rounded-[2rem] rounded-tl-[4rem] rounded-br-[4rem] p-12 bg-white/40 glass-pill border-[#DED8CF]/50 shadow-soft">
-              <div className="space-y-6 z-10 max-w-2xl relative mx-auto text-center">
-                <h1 className="text-5xl md:text-6xl font-serif text-[#2C2C24] leading-[1.1]">
-                  Cook Hands-Free with Voice Commands
-                </h1>
-                <p className="text-[#78786C] text-lg font-sans leading-relaxed">
-                  Select a recipe, place your phone on the counter, and just say <strong className="text-[#5D7052] font-semibold">"next"</strong>, <strong className="text-[#5D7052] font-semibold">"go back"</strong>, or ask <strong className="text-[#5D7052] font-semibold">"what substitute can I use?"</strong>
+            {/* Masthead */}
+            <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-10 pt-14 pb-10">
+              <div className="max-w-[700px]">
+                <div className="text-[11px] font-bold tracking-[0.14em] uppercase text-[#8A8378]">
+                  {recipes.length} {recipes.length === 1 ? 'recipe' : 'recipes'} &middot; hands-free
+                </div>
+                <h1 className="font-serif text-[52px] md:text-[68px] leading-[0.98] tracking-[-1.5px] mt-2.5">Explore</h1>
+                <p className="text-base leading-relaxed text-[#6A6459] mt-3.5 max-w-[460px]">
+                  Say what you feel like eating. ChefVoice finds the dish, then reads it out step by step while your hands stay busy.
                 </p>
+              </div>
+
+              <div className="w-full lg:w-[460px] shrink-0">
+                {/* Ruled input rather than a boxed one: the search line reads as
+                    part of the page, not as another floating control. */}
+                <div className="flex items-center gap-3.5 border-b-[1.5px] border-[#211E19] pb-3">
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-[19px] h-[19px] text-[#211E19] shrink-0">
+                    <path strokeLinecap="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                  </svg>
+                  <input
+                    type="text"
+                    placeholder={useSemanticSearch ? 'spicy creamy curry' : 'search by name or ingredient'}
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="flex-1 min-w-0 bg-transparent text-[17px] text-[#211E19] placeholder-[#B9B1A2] focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setUseSemanticSearch(v => !v)}
+                    aria-pressed={useSemanticSearch}
+                    title={useSemanticSearch
+                      ? 'Smart search on — meaning + keywords, filtered on the server'
+                      : 'Smart search off — plain name and ingredient matching'}
+                    className="flex items-center gap-2.5 shrink-0 cursor-pointer"
+                  >
+                    <span className={`w-[34px] h-[19px] rounded-full flex items-center px-[3px] transition-colors ${
+                      useSemanticSearch ? 'bg-[#46573F] justify-end' : 'bg-[#DED6C7] justify-start'
+                    }`}>
+                      <span className="w-[13px] h-[13px] rounded-full bg-[#FBF8F1]" />
+                    </span>
+                    <span className={`text-[10px] font-bold tracking-[0.13em] transition-colors ${
+                      useSemanticSearch ? 'text-[#46573F]' : 'text-[#8A8378]'
+                    }`}>
+                      SMART
+                    </span>
+                  </button>
+                </div>
+
+                <div role="status" aria-live="polite" className="text-xs text-[#8A8378] mt-2.5 h-4">
+                  {searching
+                    ? 'Searching…'
+                    : useSemanticSearch
+                      ? (searchQuery.trim().length >= 2
+                        ? `${sortedRecipes.length} close ${sortedRecipes.length === 1 ? 'match' : 'matches'}`
+                        : 'Meaning-based search — type it or say it')
+                      : 'Matching on name and ingredients'}
+                </div>
               </div>
             </div>
 
-            {/* Main Flex Columns Layout */}
-            <div className="flex flex-col lg:flex-row gap-8 items-start w-full">
-              
-              {/* Left Side: Search, Filters and Recipe Grid */}
-              <div className="flex-1 flex flex-col gap-6 w-full min-w-0">
-                
-                {/* Filters Row */}
-                <div className="flex flex-col gap-4">
-                  
-                  {/* Top Row: Explore Recipes Title & Search Controls */}
-                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 w-full">
-                    <h2 className="text-2xl font-serif font-bold text-[#2C2C24]">Explore Recipes</h2>
+            {/* Filters — one line of text controls, no chips competing with the CTA */}
+            <div className="flex flex-wrap items-center justify-between gap-y-4 gap-x-8 pb-4 border-b border-[#E4DDD0]">
+              {/* Scrolls rather than widening the page: six cuisines do not fit
+                  a phone, and letting them stretch the row made the whole
+                  document scroll sideways. */}
+              <div className="flex items-center gap-7 text-sm min-w-0 max-w-full overflow-x-auto scrollbar-none">
+                {['All', 'Indian', 'Italian', 'Quick Meals', 'Healthy', 'Desserts'].map(cuisine => (
+                  <button
+                    key={cuisine}
+                    onClick={() => setSelectedCuisine(cuisine)}
+                    className={`whitespace-nowrap cursor-pointer transition-colors pb-1.5 ${
+                      selectedCuisine === cuisine
+                        ? 'font-bold text-[#211E19] border-b-2 border-[#B4643A]'
+                        : 'font-medium text-[#6A6459] hover:text-[#211E19]'
+                    }`}
+                  >
+                    {cuisine}
+                  </button>
+                ))}
+              </div>
 
-                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 max-w-lg w-full md:w-auto shrink-0">
-                      <div className="relative flex-1 md:w-72">
-                        <input
-                          type="text"
-                          placeholder={useSemanticSearch ? "Try 'quick vegetarian pasta'…" : "Search by name or ingredients..."}
-                          value={searchQuery}
-                          onChange={(e) => setSearchQuery(e.target.value)}
-                          className="w-full bg-white/70 border border-[#DED8CF] rounded-full py-3.5 pl-12 pr-11 text-sm font-medium focus:outline-none focus:border-[#5D7052] focus:ring-2 focus:ring-[#5D7052]/20 transition-all shadow-sm text-[#2C2C24] placeholder-[#78786C]"
-                        />
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5 text-[#78786C] absolute left-4 top-3.5">
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                        </svg>
-                        {searching && (
-                          <span
-                            role="status"
-                            aria-label="Searching"
-                            className="absolute right-4 top-4 w-4 h-4 border-2 border-[#5D7052] border-t-transparent rounded-full animate-spin"
-                          />
-                        )}
-                      </div>
-
-                      {/* Smart search sends the query to the hybrid retrieval pipeline; off is
-                          plain substring matching over the loaded list. */}
-                      <button
-                        type="button"
-                        onClick={() => setUseSemanticSearch(v => !v)}
-                        aria-pressed={useSemanticSearch}
-                        title={useSemanticSearch
-                          ? 'Smart search on — meaning + keywords, filtered on the server'
-                          : 'Smart search off — plain name and ingredient matching'}
-                        className={`flex items-center gap-2 px-4 py-3.5 rounded-full text-xs font-bold whitespace-nowrap shrink-0 border transition-colors cursor-pointer ${
-                          useSemanticSearch
-                            ? 'bg-[#5D7052] text-[#F3F4F1] border-[#5D7052] shadow-soft'
-                            : 'bg-white/60 text-[#78786C] border-[#DED8CF] hover:border-[#5D7052]/50 hover:bg-white'
-                        }`}
-                      >
-                        <span className={`w-1.5 h-1.5 rounded-full ${useSemanticSearch ? 'bg-[#F3F4F1]' : 'bg-[#78786C]'}`} />
-                        Smart
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Bottom Row: Cuisine Filter Tags spanning full width */}
-                  <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none w-full">
-                    {['All', 'Indian', 'Italian', 'Quick Meals', 'Healthy', 'Desserts'].map(cuisine => (
-                      <button
-                        key={cuisine}
-                        // Category is a real server-side filter now, so it composes with
-                        // semantic search instead of having to switch it off.
-                        onClick={() => setSelectedCuisine(cuisine)}
-                        className={`px-5 py-2.5 rounded-full text-xs font-bold whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
-                          selectedCuisine === cuisine
-                            ? 'bg-[#5D7052] text-[#F3F4F1] shadow-soft' 
-                            : 'bg-white/60 text-[#78786C] border border-[#DED8CF] hover:border-[#5D7052]/50 hover:bg-white'
-                        }`}
-                      >
-                        {cuisine}
-                      </button>
-                    ))}
-                  </div>
-
-                  {/* Toolbar: Veg/Non-Veg Filter & Sort Selector */}
-                  <div className="flex flex-wrap items-center justify-between gap-4 bg-[#F0EBE5]/30 border border-[#DED8CF]/50 p-5 rounded-[2rem]">
-                    {/* Left side: Veg / Non-Veg Toggle Buttons */}
-                    <div className="flex items-center gap-3">
-                      <span className="text-xs font-bold text-[#78786C] uppercase tracking-wider select-none">Type:</span>
-                      <div className="flex bg-[#DED8CF]/30 p-1 rounded-full border border-[#DED8CF]">
-                        {(['All', 'Veg', 'Non-Veg'] as const).map(type => (
-                          <button
-                            key={type}
-                            onClick={() => setVegFilter(type)}
-                            className={`px-4 py-2 rounded-full text-xs font-bold transition-all duration-300 cursor-pointer flex items-center gap-2 ${
-                              vegFilter === type
-                                ? type === 'Veg'
-                                  ? 'bg-[#5D7052] text-[#F3F4F1] shadow-sm'
-                                  : type === 'Non-Veg'
-                                    ? 'bg-[#A85448] text-white shadow-sm'
-                                    : 'bg-[#FEFEFA] text-[#2C2C24] shadow-sm'
-                                : 'text-[#78786C] hover:text-[#2C2C24]'
-                            }`}
-                          >
-                            {type === 'Veg' && <span className="w-1.5 h-1.5 rounded-full bg-[#F3F4F1]" />}
-                            {type === 'Non-Veg' && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
-                            {type}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Right side: Sort Selector */}
-                    <div className="flex items-center gap-3">
-                      <span className="text-xs font-bold text-[#78786C] uppercase tracking-wider select-none">Sort By:</span>
-                      <select
-                        value={sortBy}
-                        onChange={(e) => setSortBy(e.target.value as any)}
-                        className="bg-[#FEFEFA] border border-[#DED8CF] rounded-full px-4 py-2.5 text-xs font-bold text-[#2C2C24] focus:outline-none focus:border-[#5D7052] cursor-pointer shadow-sm appearance-none"
-                      >
-                        {/* "default" applies no client sort, so it preserves whatever order the
-                            server sent — alphabetical when browsing, relevance-ranked when
-                            searching. Any other option overrides the ranking. */}
-                        <option value="default">
-                          {useSemanticSearch && searchQuery.trim().length >= 2 ? 'Best match' : 'Default (A-Z)'}
-                        </option>
-                        <option value="rating">Highest Rated</option>
-                        <option value="time">Shortest Cooking Time</option>
-                        <option value="recent">Recently Cooked</option>
-                      </select>
-                    </div>
-                  </div>
-
+              <div className="flex items-center gap-6 text-[13px] text-[#6A6459]">
+                <div className="flex items-center gap-4">
+                  {([['Veg', 'Veg'], ['Non-Veg', 'Non-veg'], ['All', 'Both']] as const).map(([value, label]) => (
+                    <button
+                      key={value}
+                      onClick={() => setVegFilter(value)}
+                      className={`flex items-center gap-2 cursor-pointer transition-colors ${
+                        vegFilter === value ? 'font-bold text-[#211E19]' : 'font-medium hover:text-[#211E19]'
+                      }`}
+                    >
+                      {vegFilter === value && (
+                        <span className={`w-[7px] h-[7px] rounded-full ${
+                          value === 'Non-Veg' ? 'bg-[#A85448]' : 'bg-[#46573F]'
+                        }`} />
+                      )}
+                      {label}
+                    </button>
+                  ))}
                 </div>
 
-                {/* Recipes Grid */}
-                {sortedRecipes.length === 0 ? (
-                  <div className="text-center py-20 bg-white/40 border border-[#DED8CF] rounded-[2rem] shadow-sm backdrop-blur-sm">
-                    <span className="text-5xl block mb-4 opacity-50">🔍</span>
-                    <h3 className="font-serif font-bold text-[#2C2C24] text-xl">No recipes found</h3>
-                    {/* Smart search returns nothing when no recipe is a real match, rather than
-                        padding the page out with the least-bad options. Say which of the two
-                        knobs is responsible so the empty page is actionable. */}
-                    <p className="text-[#78786C] text-sm mt-2 max-w-md mx-auto">
-                      {useSemanticSearch && searchQuery.trim().length >= 2
-                        ? (vegFilter !== 'All' || selectedCuisine !== 'All')
-                          ? <>Nothing matched <strong className="text-[#2C2C24]">“{searchQuery.trim()}”</strong> within the current filters. Try clearing the {vegFilter !== 'All' ? `${vegFilter} ` : ''}{selectedCuisine !== 'All' ? `${selectedCuisine} ` : ''}filter, or rephrase.</>
-                          : <>Nothing in the catalogue is a close match for <strong className="text-[#2C2C24]">“{searchQuery.trim()}”</strong>. Try describing the dish differently.</>
-                        : 'Try other search terms, or clear the filters above.'}
-                    </p>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-6">
-                    {sortedRecipes.map((recipe) => {
-                      const historyEntries = cookingHistory.filter(h => h.recipe_id === recipe.id);
-                      let cookedDateStr = undefined;
-                      if (historyEntries.length > 0) {
-                        const latest = historyEntries.reduce((latest, current) => {
-                          return new Date(current.completed_at) > new Date(latest.completed_at) ? current : latest;
-                        }, historyEntries[0]);
-                        const date = new Date(latest.completed_at);
-                        cookedDateStr = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-                      }
+                <span className="w-px h-4 bg-[#E4DDD0]" />
 
-                      return (
-                        <RecipeCard 
-                          key={recipe.id} 
-                          recipe={recipe} 
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <span>Sort:</span>
+                  <span className="relative flex items-center">
+                    {/* "default" keeps whatever order the server sent — alphabetical when
+                        browsing, relevance-ranked when searching. */}
+                    <select
+                      value={sortBy}
+                      onChange={(e) => setSortBy(e.target.value as any)}
+                      className="appearance-none bg-transparent font-bold text-[#211E19] pr-5 cursor-pointer focus:outline-none"
+                    >
+                      <option value="default">
+                        {useSemanticSearch && searchQuery.trim().length >= 2 ? 'Best match' : 'A–Z'}
+                      </option>
+                      <option value="rating">Highest rated</option>
+                      <option value="time">Quickest</option>
+                      <option value="recent">Recently cooked</option>
+                    </select>
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.4} stroke="currentColor" className="w-[11px] h-[11px] text-[#211E19] absolute right-0 pointer-events-none">
+                      <path strokeLinecap="round" d="M6 9l6 6 6-6" />
+                    </svg>
+                  </span>
+                </label>
+              </div>
+            </div>
+
+            {/* Results */}
+            {sortedRecipes.length === 0 ? (
+              <div className="py-24 text-center">
+                <h3 className="font-serif text-[30px] text-[#211E19]">No recipes found</h3>
+                {/* Smart search returns nothing when no recipe is a real match, rather than
+                    padding the page out with the least-bad options. Say which of the two
+                    knobs is responsible so the empty page is actionable. */}
+                <p className="text-sm text-[#6A6459] mt-3 max-w-md mx-auto leading-relaxed">
+                  {useSemanticSearch && searchQuery.trim().length >= 2
+                    ? (vegFilter !== 'All' || selectedCuisine !== 'All')
+                      ? <>Nothing matched <strong className="text-[#211E19]">“{searchQuery.trim()}”</strong> within the current filters. Try clearing the {vegFilter !== 'All' ? `${vegFilter} ` : ''}{selectedCuisine !== 'All' ? `${selectedCuisine} ` : ''}filter, or rephrase.</>
+                      : <>Nothing in the catalogue is a close match for <strong className="text-[#211E19]">“{searchQuery.trim()}”</strong>. Try describing the dish differently.</>
+                    : 'Try other search terms, or clear the filters above.'}
+                </p>
+              </div>
+            ) : (
+              <>
+                <div className="flex flex-col xl:flex-row gap-10 pt-11">
+                  {/* Featured dish. One recipe gets the room to be photographed
+                      and started in a single tap; the rest grid out beside it. */}
+                  {featureRecipe && (
+                    <div className="w-full xl:w-[620px] shrink-0 flex flex-col">
+                      <div
+                        onClick={() => handlePickRecipe(featureRecipe)}
+                        className="group relative h-[300px] xl:h-[372px] rounded-[4px] bg-[#EAE3D4] overflow-hidden cursor-pointer"
+                      >
+                        <img
+                          src={featureRecipe.image_url || 'https://images.unsplash.com/photo-1495521821757-a1efb6729352?w=600&auto=format&fit=crop&q=60'}
+                          alt={featureRecipe.title}
+                          onError={(e) => {
+                            const img = e.currentTarget;
+                            const fallback = 'https://images.unsplash.com/photo-1495521821757-a1efb6729352?w=600&auto=format&fit=crop&q=60';
+                            if (img.src !== fallback) img.src = fallback;
+                          }}
+                          className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform duration-700"
+                        />
+                        <span className="absolute top-5 left-5 bg-[#FBF8F1] text-[#211E19] text-[10px] font-bold tracking-[0.14em] uppercase px-3 py-1.5 rounded-[2px]">
+                          {featureRecipe.cuisine}
+                        </span>
+                        {cookedDates[featureRecipe.id] && (
+                          <span className="absolute bottom-5 left-5 bg-[#FBF8F1] text-[#B4643A] text-[10px] font-bold tracking-[0.12em] uppercase px-3 py-1.5 rounded-[2px]">
+                            Cooked {cookedDates[featureRecipe.id]}
+                          </span>
+                        )}
+                        <button
+                          onClick={(e) => handleFavoriteToggle(e, featureRecipe.id)}
+                          className="absolute top-4 right-4 w-9 h-9 rounded-full bg-[#FBF8F1] text-[#B4643A] flex items-center justify-center cursor-pointer focus:outline-none focus-visible:ring-2 ring-[#46573F]/30"
+                          aria-label={favorites.some(f => f.recipe_id === featureRecipe.id) ? 'Remove from favourites' : 'Add to favourites'}
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" fill={favorites.some(f => f.recipe_id === featureRecipe.id) ? 'currentColor' : 'none'} viewBox="0 0 24 24" strokeWidth={1.8} stroke="currentColor" className="w-[18px] h-[18px]">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M12 20s-7.5-4.6-7.5-9.6A4.4 4.4 0 0 1 12 7.4a4.4 4.4 0 0 1 7.5 3c0 5-7.5 9.6-7.5 9.6Z" />
+                          </svg>
+                        </button>
+                      </div>
+
+                      <div className="text-[11px] font-bold tracking-[0.14em] uppercase text-[#B4643A] mt-6">
+                        {cookCounts[featureRecipe.id] > 1
+                          ? `Featured · you made this ${cookCounts[featureRecipe.id]} times`
+                          : useSemanticSearch && searchQuery.trim().length >= 2
+                            ? 'Best match'
+                            : 'Featured'}
+                      </div>
+
+                      <h2
+                        onClick={() => handlePickRecipe(featureRecipe)}
+                        className="font-serif text-[36px] xl:text-[43px] leading-[1.05] tracking-[-0.6px] mt-2.5 cursor-pointer hover:text-[#46573F] transition-colors"
+                      >
+                        {featureRecipe.title}
+                      </h2>
+
+                      <div className="flex items-center flex-wrap gap-3.5 text-sm text-[#6A6459] mt-3.5">
+                        <span>{featureRecipe.time} min</span>
+                        <span className="text-[#D6CDBC]">/</span>
+                        <span>{featureRecipe.servings} {featureRecipe.servings === 1 ? 'serving' : 'servings'}</span>
+                        <span className="text-[#D6CDBC]">/</span>
+                        <span>{featureRecipe.difficulty}</span>
+                        <span className="text-[#D6CDBC]">/</span>
+                        <span className="flex items-center gap-1.5 font-bold text-[#211E19]">
+                          <svg viewBox="0 0 24 24" fill="#B4643A" className="w-3.5 h-3.5">
+                            <path d="M12 2l2.9 6.3 6.8.8-5 4.7 1.3 6.8L12 17.3 6 20.6l1.3-6.8-5-4.7 6.8-.8z" />
+                          </svg>
+                          {featureRecipe.average_rating && featureRecipe.rating_count
+                            ? <>{featureRecipe.average_rating.toFixed(1)} <span className="font-normal text-[#8A8378]">({featureRecipe.rating_count})</span></>
+                            : 'New'}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center flex-wrap gap-6 mt-6">
+                        <button
+                          onClick={() => handleStartCooking(featureRecipe)}
+                          className="flex items-center gap-2.5 bg-[#46573F] hover:bg-[#3C4A36] text-[#FBF8F1] text-[15px] font-bold px-[30px] py-[15px] rounded-full cursor-pointer active:scale-[0.98] transition-all"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-[17px] h-[17px]">
+                            <rect x="9" y="2.5" width="6" height="11.5" rx="3" />
+                            <path strokeLinecap="round" d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3.5" />
+                          </svg>
+                          Start voice guided
+                        </button>
+                        <button
+                          onClick={() => handlePickRecipe(featureRecipe)}
+                          className="text-sm font-bold text-[#211E19] border-b-[1.5px] border-[#211E19] pb-0.5 cursor-pointer hover:text-[#46573F] hover:border-[#46573F] transition-colors"
+                        >
+                          View recipe
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {sortedRecipes.length > 1 && (
+                    <div className="flex-1 min-w-0 grid grid-cols-1 sm:grid-cols-2 gap-9 content-start">
+                      {sortedRecipes.slice(1, 5).map(recipe => (
+                        <RecipeCard
+                          key={recipe.id}
+                          recipe={recipe}
                           onClick={() => handlePickRecipe(recipe)}
                           isFavorite={favorites.some(f => f.recipe_id === recipe.id)}
                           onFavoriteToggle={(e) => handleFavoriteToggle(e, recipe.id)}
-                          cookedDate={cookedDateStr}
+                          cookedDate={cookedDates[recipe.id]}
                         />
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-
-              {/* Right Side: Recently Made Sidebar */}
-              <div className="w-full lg:w-80 shrink-0 bg-white/70 border border-[#DED8CF]/50 rounded-[2rem] p-8 shadow-float flex flex-col gap-6 self-stretch lg:self-auto backdrop-blur-md">
-                <div className="flex items-center justify-between border-b border-[#DED8CF]/30 pb-4">
-                  <h3 className="font-serif font-bold text-[#2C2C24] text-lg flex items-center gap-2">
-                    <span>⏱️</span> Recently Made
-                  </h3>
-                  <span className="text-[10px] font-bold text-[#78786C] bg-[#F0EBE5] px-3 py-1 rounded-full uppercase tracking-wider">
-                    Recent Logs
-                  </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
-                {cookingHistory.length === 0 ? (
-                  <div className="text-center py-12 bg-[#F0EBE5]/30 rounded-[1.5rem] border border-[#DED8CF] border-dashed my-2">
-                    <span className="text-4xl block mb-3 opacity-50">🧑‍🍳</span>
-                    <p className="text-[#4A4A40] text-sm font-bold">No cooked meals yet</p>
-                    <p className="text-[#78786C] text-[11px] mt-2 px-6 leading-relaxed">
-                      Complete a recipe in voice guided mode to log your achievements here!
-                    </p>
-                  </div>
-                ) : (
-                  <div className="flex flex-col gap-4 overflow-y-auto max-h-[500px] pr-2">
-                    {cookingHistory.slice(0, 6).map((entry) => {
-                      const recipe = recipes.find(r => r.id === entry.recipe_id);
-                      if (!recipe) return null;
-                      const date = new Date(entry.completed_at);
-                      const relativeDate = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-
-                      return (
-                        <div
-                          key={entry.id}
-                          onClick={() => handlePickRecipe(recipe)}
-                          className="group flex items-center gap-4 p-3 hover:bg-[#FEFEFA] rounded-[1.5rem] transition-all duration-300 cursor-pointer border border-transparent hover:border-[#5D7052]/30 hover:shadow-soft"
-                        >
-                          <div className="w-14 h-14 rounded-xl overflow-hidden bg-[#F0EBE5] shrink-0">
-                            <img
-                              src={recipe.image_url || 'https://images.unsplash.com/photo-1495521821757-a1efb6729352?w=600&auto=format&fit=crop&q=60'}
-                              alt={recipe.title}
-                              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                            />
-                          </div>
-
-                          <div className="flex-1 min-w-0">
-                            <h4 className="font-serif font-bold text-[#2C2C24] text-sm truncate leading-snug group-hover:text-[#5D7052] transition-colors">
-                              {recipe.title}
-                            </h4>
-                            <div className="flex items-center gap-1.5 mt-1 text-[10px] text-[#78786C] font-bold uppercase tracking-wider">
-                              <span>{recipe.cuisine}</span>
-                              <span className="text-[#DED8CF]">•</span>
-                              <span className="text-[#5D7052]">{relativeDate}</span>
-                            </div>
-                            <div className="flex items-center gap-0.5 mt-1 text-[10px] text-[#C18C5D]">
-                              {"★".repeat(entry.rating || 5)}
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
+                {sortedRecipes.length > 5 && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-x-9 gap-y-12 mt-14 pt-14 border-t border-[#E4DDD0]">
+                    {sortedRecipes.slice(5).map(recipe => (
+                      <RecipeCard
+                        key={recipe.id}
+                        recipe={recipe}
+                        onClick={() => handlePickRecipe(recipe)}
+                        isFavorite={favorites.some(f => f.recipe_id === recipe.id)}
+                        onFavoriteToggle={(e) => handleFavoriteToggle(e, recipe.id)}
+                        cookedDate={cookedDates[recipe.id]}
+                      />
+                    ))}
                   </div>
                 )}
+              </>
+            )}
+
+            {/* Recently made — a strip along the bottom rather than a column
+                competing with the grid for the same eye path. */}
+            {cookingHistory.length > 0 && (
+              <div className="mt-16 pt-7 border-t border-[#E4DDD0]">
+                <div className="flex items-baseline justify-between">
+                  <h2 className="font-serif text-[25px]">Recently made</h2>
+                  <button
+                    onClick={() => setShowProfilePanel(true)}
+                    className="text-[13px] font-bold text-[#211E19] border-b-[1.5px] border-[#211E19] pb-0.5 cursor-pointer hover:text-[#46573F] hover:border-[#46573F] transition-colors"
+                  >
+                    View all
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-8 mt-5">
+                  {cookingHistory.slice(0, 4).map(entry => {
+                    const recipe = recipes.find(r => r.id === entry.recipe_id);
+                    if (!recipe) return null;
+                    const date = new Date(entry.completed_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+
+                    return (
+                      <div
+                        key={entry.id}
+                        onClick={() => handlePickRecipe(recipe)}
+                        className="group flex items-center gap-3.5 cursor-pointer"
+                      >
+                        <div className="w-14 h-14 rounded-[3px] bg-[#EAE3D4] overflow-hidden shrink-0">
+                          <img
+                            src={recipe.image_url || 'https://images.unsplash.com/photo-1495521821757-a1efb6729352?w=600&auto=format&fit=crop&q=60'}
+                            alt={recipe.title}
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="text-sm font-bold text-[#211E19] truncate group-hover:text-[#46573F] transition-colors">
+                            {recipe.title}
+                          </div>
+                          <div className="text-xs text-[#8A8378] mt-0.5">{recipe.cuisine} &middot; {date}</div>
+                          <div className="text-[11px] text-[#B4643A] tracking-[1px] mt-0.5">
+                            {'★'.repeat(entry.rating || 5)}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
+            )}
+
+            <div className="h-20" />
           </div>
         ) : view === 'detail' ? (
           /* Recipe Detail Screen */
@@ -1204,7 +1383,7 @@ export default function App() {
                     </div>
 
                     <button
-                      onClick={handleStartCooking}
+                      onClick={() => handleStartCooking()}
                       className="w-full bg-[#5D7052] hover:bg-[#5D7052]/90 text-[#F3F4F1] font-bold py-4 rounded-full shadow-soft active:scale-[0.99] transition-all flex items-center justify-center gap-3 cursor-pointer text-base uppercase tracking-wider"
                     >
                       Start Cooking (Voice Guided)
@@ -1531,254 +1710,257 @@ export default function App() {
             </div>
           </div>
         ) : (
-          /* Cooking Mode: Clean, Dark, Large Text Kitchen Dashboard */
+          /* Cooking mode — the mic-live surface. One instruction sized for
+             arm's length on the left; everything that answers a question
+             (timer, what's coming, the transcript) parked in one rail. */
           selectedRecipe && (
-            <div className="h-screen bg-[#1A1A14] text-[#F3F4F1] flex flex-col overflow-hidden relative font-sans">
-              {/* Header controls bar */}
-              <div className="flex items-center justify-between py-5 px-8 border-b border-[#2C2C24] z-10 bg-[#1A1A14]/80 backdrop-blur-md">
-                <div className="flex items-center gap-3">
-                  <button
-                    onClick={() => {
-                      timers.clearAllTimers();
-                      clearActiveCook();
-                      endVoiceSession(`Cooking: ${selectedRecipe?.title ?? 'recipe'}`);
-                      setView('detail');
-                    }}
-                    className="text-[#A0A096] hover:text-[#F3F4F1] p-3 rounded-full hover:bg-[#2C2C24] transition-colors cursor-pointer text-sm font-bold uppercase tracking-wider"
-                  >
-                    ✕ Close Mode
-                  </button>
-                </div>
+            <div className="h-screen bg-[#191712] text-[#F4EFE7] flex flex-col overflow-hidden font-sans">
 
-                <div className="flex items-center gap-4">
-                  <div className="flex items-center gap-2 bg-[#2C2C24] border border-[#4A4A40] rounded-full px-4 py-2 shadow-inner">
-                    <span className="text-[10px] font-bold text-[#A0A096] uppercase tracking-wider">Voice:</span>
-                    <span className="text-[10px] font-bold px-3 py-1.5 rounded-full uppercase tracking-wider bg-[#4A4A40] text-[#F3F4F1] shadow-soft">
-                      Web Speech
-                    </span>
-                  </div>
-                </div>
+              <div className="h-[68px] shrink-0 flex items-center justify-between gap-6 px-6 md:px-11 border-b border-[#2E2A22]">
+                <button
+                  onClick={() => {
+                    timers.clearAllTimers();
+                    clearActiveCook();
+                    endVoiceSession(`Cooking: ${selectedRecipe?.title ?? 'recipe'}`);
+                    setView('detail');
+                  }}
+                  className="flex items-center gap-2.5 text-[13px] font-bold text-[#A29A88] hover:text-[#F4EFE7] transition-colors cursor-pointer shrink-0"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.2} stroke="currentColor" className="w-[15px] h-[15px]">
+                    <path strokeLinecap="round" d="M6 6l12 12M18 6L6 18" />
+                  </svg>
+                  Leave cooking mode
+                </button>
+
+                <span className="font-serif text-xl truncate">{selectedRecipe.title}</span>
+
+                <span className="flex items-center gap-2.5 text-[11px] font-bold tracking-[0.1em] uppercase shrink-0" style={{ color: voiceState.color }}>
+                  <span className="w-[7px] h-[7px] rounded-full" style={{ backgroundColor: voiceState.color }} />
+                  {voiceState.label}
+                </span>
               </div>
 
-              {/* Step Content Card / Split Screen with Chat Drawer */}
-              <div className="flex-1 flex flex-col md:flex-row overflow-hidden relative max-w-7xl mx-auto w-full z-10">
-                {/* Left Side: Cooking steps and visual wave */}
-                <div className="flex-1 flex flex-col justify-between p-8 overflow-y-auto min-w-0">
-                  <div className="space-y-4">
-                    <div className="flex justify-between items-center">
-                      <span className="text-xs font-bold text-[#C18C5D] uppercase tracking-wider">
-                        Step {currentStep + 1} of {selectedRecipe.steps.length}
-                      </span>
-                      <span className="text-sm font-serif font-bold text-[#A0A096] truncate max-w-[250px]">
-                        {selectedRecipe.title}
-                      </span>
-                    </div>
-                    
-                    {/* Progress bar */}
-                    <div className="w-full bg-[#2C2C24] h-2.5 rounded-full overflow-hidden flex gap-1 shadow-inner">
+              <div className="flex-1 min-h-0 flex flex-col lg:flex-row">
+
+                <div className="flex-1 min-w-0 flex flex-col px-6 md:px-12 py-8 overflow-y-auto">
+
+                  <div className="flex items-center gap-4 shrink-0">
+                    <span className="text-[11px] font-bold tracking-[0.16em] text-[#C97A46] shrink-0">
+                      STEP {currentStep + 1} OF {selectedRecipe.steps.length}
+                    </span>
+                    <span className="flex-1 flex gap-1.5">
                       {selectedRecipe.steps.map((s, idx) => (
-                        <div 
+                        <span
                           key={s.step}
-                          className={`flex-1 h-full rounded-full transition-all duration-500 ${
-                            idx === currentStep 
-                              ? 'bg-[#5D7052]' 
-                              : idx < currentStep 
-                                ? 'bg-[#5D7052]/40' 
-                                : 'bg-[#2C2C24]'
+                          className={`flex-1 h-[2px] transition-colors duration-500 ${
+                            idx <= currentStep ? 'bg-[#7E9270]' : 'bg-[#322D24]'
                           }`}
                         />
                       ))}
-                    </div>
+                    </span>
+                    {elapsedMinutes !== null && (
+                      <span className="text-xs text-[#6E6858] shrink-0">{elapsedMinutes} min elapsed</span>
+                    )}
                   </div>
 
-
-
-                  {/* Main Instruction */}
-                  <div className="flex-1 flex flex-col justify-center gap-8 py-8 text-center">
-                    {selectedRecipe.steps[currentStep].safety_alert && (
-                      <div className="bg-[#A85448]/20 border border-[#A85448]/50 text-[#F3F4F1] p-4 rounded-[1.5rem] text-xs font-bold flex items-center justify-center gap-2 max-w-xl mx-auto shadow-float backdrop-blur-sm">
-                        <span className="tracking-wider uppercase">SAFETY ALERT: {selectedRecipe.steps[currentStep].safety_alert}</span>
-                      </div>
-                    )}
-
-                    <h2 className="text-4xl md:text-5xl lg:text-6xl font-serif font-bold leading-tight tracking-tight max-w-3xl mx-auto select-text selection:bg-[#5D7052]/40 text-[#F3F4F1]">
-                      "{selectedRecipe.steps[currentStep].text}"
-                    </h2>
-
-                    {/* Step Ingredients details */}
-                    <div className="flex flex-wrap gap-3 justify-center max-w-xl mx-auto mt-6">
-                      {selectedRecipe.ingredients.map(ing => {
-                        const isMentioned = selectedRecipe.steps[currentStep].text.toLowerCase().includes(ing.name.toLowerCase().split(' ')[0]);
-                        if (!isMentioned) return null;
-                        return (
-                          <span key={ing.name} className="text-sm font-bold bg-[#2C2C24] border border-[#4A4A40] px-4 py-2 rounded-full text-[#DED8CF] shadow-sm">
-                            {ing.amount} {ing.unit} {ing.name}
-                          </span>
-                        );
-                      })}
+                  {/* A rule rather than a red pill: it reads as part of the page
+                      and still stops the eye before the instruction. */}
+                  {selectedRecipe.steps[currentStep].safety_alert && (
+                    <div className="flex items-center gap-3 mt-8 py-3.5 border-y border-[#4A3323] shrink-0">
+                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4 text-[#C97A46] shrink-0">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 4l9 16H3z" />
+                        <path strokeLinecap="round" d="M12 10v4M12 17.2v.2" />
+                      </svg>
+                      <span className="text-[13px] font-bold text-[#C97A46]">
+                        {selectedRecipe.steps[currentStep].safety_alert}
+                      </span>
                     </div>
+                  )}
 
-                    {/* Next step overview */}
+                  <h2 className="font-serif text-[30px] md:text-[42px] xl:text-[54px] leading-[1.12] tracking-[-0.8px] mt-9 max-w-[820px] select-text">
+                    {selectedRecipe.steps[currentStep].text}
+                  </h2>
+
+                  {stepIngredients.length > 0 && (
+                    <div className="flex items-center flex-wrap gap-y-3 mt-9 shrink-0">
+                      <span className="text-[11px] font-bold tracking-[0.14em] text-[#6E6858] pr-6">IN THIS STEP</span>
+                      {stepIngredients.map(ing => (
+                        <span key={ing.name} className="flex items-baseline gap-2 px-6 border-l border-[#2E2A22]">
+                          <span className="font-serif text-[22px]">{ing.amount} {ing.unit}</span>
+                          <span className="text-sm text-[#A29A88]">{ing.name}</span>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  <span className="flex-1 min-h-8" />
+
+                  <div className="flex items-center flex-wrap gap-6 shrink-0">
+                    <button
+                      onClick={handlePrevStep}
+                      disabled={currentStep === 0}
+                      className="flex items-center gap-2 text-sm font-bold text-[#A29A88] hover:text-[#F4EFE7] disabled:opacity-30 disabled:hover:text-[#A29A88] disabled:cursor-not-allowed transition-colors cursor-pointer"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.2} stroke="currentColor" className="w-[15px] h-[15px]">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M15 6l-6 6 6 6" />
+                      </svg>
+                      Previous
+                    </button>
+
+                    <button
+                      onClick={handleRepeatStep}
+                      className="text-sm font-bold text-[#A29A88] hover:text-[#F4EFE7] transition-colors cursor-pointer"
+                      title="Read this step again"
+                    >
+                      Repeat
+                    </button>
+
                     {currentStep < selectedRecipe.steps.length - 1 ? (
-                      <div className="mt-8 p-5 bg-[#2C2C24]/60 border border-[#4A4A40] rounded-[1.5rem] max-w-xl mx-auto text-left shadow-inner backdrop-blur-sm">
-                        <span className="text-[10px] font-bold text-[#C18C5D] uppercase tracking-wider block mb-2">Up Next:</span>
-                        <p className="text-sm text-[#DED8CF] font-serif font-medium line-clamp-2">
-                          {selectedRecipe.steps[currentStep + 1].text}
-                        </p>
-                      </div>
+                      <button
+                        onClick={handleNextStep}
+                        className="flex items-center gap-2.5 bg-[#C97A46] hover:bg-[#D6874F] text-[#191712] text-[15px] font-bold px-[30px] py-[15px] rounded-full cursor-pointer active:scale-[0.98] transition-all"
+                      >
+                        Next step
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.4} stroke="currentColor" className="w-4 h-4">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M9 6l6 6-6 6" />
+                        </svg>
+                      </button>
                     ) : (
-                      <div className="mt-8 p-5 bg-[#5D7052]/20 border border-[#5D7052]/40 rounded-[1.5rem] max-w-xl mx-auto text-left shadow-inner backdrop-blur-sm">
-                        <span className="text-[10px] font-bold text-[#F3F4F1] uppercase tracking-wider block mb-2">Up Next:</span>
-                        <p className="text-sm text-[#F3F4F1] font-serif font-bold">
-                          Finish and submit your cooking entry!
-                        </p>
-                      </div>
+                      <button
+                        onClick={() => {
+                          setCompletionRating(0);
+                          setShowCompletionModal(true);
+                        }}
+                        className="flex items-center gap-2.5 bg-[#46573F] hover:bg-[#52664A] text-[#F4EFE7] text-[15px] font-bold px-[30px] py-[15px] rounded-full cursor-pointer active:scale-[0.98] transition-all"
+                      >
+                        Finish and rate
+                      </button>
                     )}
 
-                    {/* Step Navigation Buttons */}
-                    <div className="flex items-center justify-center gap-4 mt-8">
-                      <button
-                        onClick={handlePrevStep}
-                        disabled={currentStep === 0}
-                        className={`px-5 py-3 rounded-full text-xs font-bold uppercase tracking-wider flex items-center gap-2 transition-all duration-300 select-none ${
-                          currentStep === 0
-                            ? 'bg-[#2C2C24] text-[#78786C] border border-[#4A4A40] cursor-not-allowed opacity-50'
-                            : 'bg-[#2C2C24] border border-[#4A4A40] text-[#DED8CF] hover:text-[#F3F4F1] hover:bg-[#4A4A40] active:scale-95 cursor-pointer shadow-sm'
-                        }`}
-                      >
-                        ← Previous
-                      </button>
+                    <span className="flex-1" />
 
-                      <button
-                        onClick={handleRepeatStep}
-                        className="px-5 py-3 bg-[#2C2C24] border border-[#4A4A40] text-[#DED8CF] hover:text-[#F3F4F1] hover:bg-[#4A4A40] rounded-full text-xs font-bold uppercase tracking-wider transition-all duration-300 active:scale-95 cursor-pointer select-none shadow-sm"
-                        title="Repeat current step instructions"
-                      >
-                        Repeat
-                      </button>
-
-                      {currentStep < selectedRecipe.steps.length - 1 ? (
-                        <button
-                          onClick={handleNextStep}
-                          className="px-6 py-3 bg-[#5D7052] hover:bg-[#5D7052]/90 text-[#F3F4F1] rounded-full text-xs font-bold uppercase tracking-wider flex items-center gap-2 transition-all duration-300 active:scale-95 shadow-soft cursor-pointer select-none"
-                        >
-                          Next Step →
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => {
-                            setCompletionRating(0);
-                            setShowCompletionModal(true);
-                          }}
-                          className="px-6 py-3 bg-gradient-to-r from-[#5D7052] to-[#4A5D40] hover:from-[#4A5D40] hover:to-[#364A2F] text-[#F3F4F1] rounded-full text-xs font-bold uppercase tracking-wider flex items-center gap-2 transition-all duration-300 active:scale-95 shadow-float cursor-pointer select-none animate-pulse"
-                        >
-                          Submit Completion
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Waveform visualizer */}
-                  <div className="space-y-6">
-                    <Waveform status={voice.status} analyser={voice.analyser} muted={voice.isMuted} />
-
-                    {/* Mute / unmute the microphone */}
-                    <div className="flex justify-center">
+                    <div className="flex items-center gap-4">
+                      <Waveform
+                        status={voice.status}
+                        analyser={voice.analyser}
+                        muted={voice.isMuted}
+                        className="w-28 h-9"
+                        hideLabel
+                      />
                       <button
                         onClick={voice.toggleMute}
                         disabled={voice.status === 'idle' || voice.status === 'connecting'}
                         aria-pressed={voice.isMuted}
-                        aria-label={voice.isMuted ? 'Unmute microphone' : 'Mute microphone'}
-                        className={`px-6 py-3 rounded-full text-xs font-bold uppercase tracking-wider flex items-center gap-2 transition-all duration-300 active:scale-95 shadow-float cursor-pointer select-none disabled:opacity-40 disabled:cursor-not-allowed ${
-                          voice.isMuted
-                            ? 'bg-amber-500/90 hover:bg-amber-500 text-[#1A1A14]'
-                            : 'bg-[#2C2C24] hover:bg-[#3A3A30] text-[#F3F4F1] border border-[#4A4A40]'
-                        }`}
+                        className="flex items-center gap-2.5 text-sm font-bold text-[#A29A88] hover:text-[#F4EFE7] disabled:opacity-30 disabled:cursor-not-allowed transition-colors cursor-pointer"
                       >
                         {voice.isMuted ? (
-                          <>
-                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">
-                              <path d="M13.5 4.06c0-1.336-1.616-2.005-2.56-1.06l-2.72 2.72H6.75A2.75 2.75 0 0 0 4 8.47v7.06a2.75 2.75 0 0 0 2.75 2.75h1.47l2.72 2.72c.944.945 2.56.276 2.56-1.06V4.06Z" />
-                              <path d="m17.28 9.22 1.72 1.72 1.72-1.72a.75.75 0 1 1 1.06 1.06L20.06 12l1.72 1.72a.75.75 0 1 1-1.06 1.06L19 13.06l-1.72 1.72a.75.75 0 1 1-1.06-1.06L17.94 12l-1.72-1.72a.75.75 0 1 1 1.06-1.06Z" />
-                            </svg>
-                            Unmute Mic
-                          </>
+                          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4">
+                            <rect x="9" y="2.5" width="6" height="11.5" rx="3" />
+                            <path strokeLinecap="round" d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3.5M4 3l16 18" />
+                          </svg>
                         ) : (
-                          <>
-                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">
-                              <path d="M8.25 4.5a3.75 3.75 0 1 1 7.5 0v8.25a3.75 3.75 0 1 1-7.5 0V4.5Z" />
-                              <path d="M6 10.5a.75.75 0 0 1 .75.75v1.5a5.25 5.25 0 1 0 10.5 0v-1.5a.75.75 0 0 1 1.5 0v1.5a6.751 6.751 0 0 1-6 6.709v2.291h3a.75.75 0 0 1 0 1.5h-7.5a.75.75 0 0 1 0-1.5h3v-2.291a6.751 6.751 0 0 1-6-6.709v-1.5A.75.75 0 0 1 6 10.5Z" />
-                            </svg>
-                            Mute Mic
-                          </>
+                          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4">
+                            <rect x="9" y="2.5" width="6" height="11.5" rx="3" />
+                            <path strokeLinecap="round" d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3.5" />
+                          </svg>
                         )}
+                        {voice.isMuted ? 'Unmute' : 'Mute'}
                       </button>
                     </div>
+                  </div>
 
-                    <div className="text-center text-[10px] text-[#A0A096] font-bold uppercase tracking-wider flex flex-wrap items-center justify-center gap-4 select-none">
-                      <span className="bg-[#2C2C24] px-3 py-1.5 rounded-full border border-[#4A4A40]">Speak: "next"</span>
-                      <span className="bg-[#2C2C24] px-3 py-1.5 rounded-full border border-[#4A4A40]">"go back"</span>
-                      <span className="bg-[#2C2C24] px-3 py-1.5 rounded-full border border-[#4A4A40]">"repeat step"</span>
-                      <span className="bg-[#2C2C24] px-3 py-1.5 rounded-full border border-[#4A4A40]">"set 5 minute timer"</span>
+                  <div className="text-[13px] text-[#6E6858] mt-4 shrink-0">
+                    Say <span className="text-[#F4EFE7] font-bold">“next”</span>,{' '}
+                    <span className="text-[#F4EFE7] font-bold">“go back”</span>,{' '}
+                    <span className="text-[#F4EFE7] font-bold">“repeat that”</span> or{' '}
+                    <span className="text-[#F4EFE7] font-bold">“set a 5 minute timer”</span> — you can interrupt mid-sentence.
+                  </div>
+                </div>
+
+                <div className="w-full lg:w-[380px] shrink-0 border-t lg:border-t-0 lg:border-l border-[#2E2A22] flex flex-col min-h-0">
+
+                  <div className="px-9 pt-8 pb-7 shrink-0">
+                    {timers.timers.length > 0 ? (
+                      <TimerWidget
+                        timers={timers.timers}
+                        onCancel={timers.removeTimer}
+                        onAddSeconds={timers.addTimeToTimer}
+                      />
+                    ) : (
+                      <>
+                        <div className="text-[11px] font-bold tracking-[0.14em] text-[#6E6858]">TIMER</div>
+                        <div className="text-sm text-[#A29A88] leading-relaxed mt-3">
+                          Nothing running. Say <span className="text-[#F4EFE7] font-bold">“set a 10 minute timer”</span> and it appears here.
+                        </div>
+                      </>
+                    )}
+                  </div>
+
+                  <div className="px-9 py-7 border-t border-[#2E2A22] shrink-0">
+                    <div className="text-[11px] font-bold tracking-[0.14em] text-[#6E6858]">UP NEXT</div>
+                    {currentStep < selectedRecipe.steps.length - 1 ? (
+                      <div className="font-serif text-[21px] leading-[1.3] text-[#CFC7B6] mt-3">
+                        {selectedRecipe.steps[currentStep + 1].text}
+                      </div>
+                    ) : (
+                      <div className="font-serif text-[21px] leading-[1.3] text-[#CFC7B6] mt-3">
+                        Last step — then rate how it went and it lands in your cooking log.
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex-1 min-h-0 border-t border-[#2E2A22] flex flex-col">
+                    <div className="px-9 pt-7 pb-1 text-[11px] font-bold tracking-[0.14em] text-[#6E6858] shrink-0">
+                      CONVERSATION
+                    </div>
+                    <div className="flex-1 min-h-0">
+                      <ChatArea
+                        messages={voice.messages}
+                        isAiThinking={voice.isAiThinking}
+                        interimTranscript={voice.interimTranscript}
+                        emptyHint={
+                          <div className="h-full flex items-start px-4 md:px-8 pt-2">
+                            <p className="text-sm text-[#6E6858] leading-relaxed">
+                              Ask anything as you cook — a substitution, a timing, or “add cream to my list”. Questions and replies land here.
+                            </p>
+                          </div>
+                        }
+                      />
+                    </div>
+                  </div>
+
+                  <div className="px-9 py-6 border-t border-[#2E2A22] shrink-0 flex flex-col gap-5">
+                    <ModelSelector value={voice.modelProvider} onChange={voice.setModelProvider} hideHint />
+
+                    <form onSubmit={handleTextSubmit} className="flex items-center gap-3">
+                      <input
+                        type="text"
+                        placeholder="Ask a question"
+                        value={textInput}
+                        onChange={(e) => setTextInput(e.target.value)}
+                        className="flex-1 min-w-0 bg-transparent border-b border-[#3A342A] focus:border-[#7E9270] pb-2.5 text-sm text-[#F4EFE7] placeholder-[#6E6858] focus:outline-none transition-colors"
+                      />
+                      <button
+                        type="submit"
+                        aria-label="Send"
+                        className="w-9 h-9 rounded-full bg-[#46573F] hover:bg-[#52664A] flex items-center justify-center shrink-0 cursor-pointer transition-colors"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4 text-[#F4EFE7]">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M4 12h15M13 6l6 6-6 6" />
+                        </svg>
+                      </button>
+                    </form>
+
+                    <div className="text-[10px] font-bold tracking-[0.13em] text-[#4A4436] uppercase">
+                      Spoken with Web Speech
                     </div>
                   </div>
                 </div>
-
-                {/* Right Side: Conversation Chat Logs & Keyboard Input Drawer */}
-                <div className="w-full md:w-96 border-t md:border-t-0 md:border-l border-[#2C2C24] bg-[#1A1A14]/50 backdrop-blur-xl flex flex-col h-[360px] md:h-auto overflow-hidden relative shadow-inner">
-                  <div className="px-6 py-4 border-b border-[#2C2C24] bg-[#1A1A14] flex items-center justify-between text-[#A0A096] font-bold text-[11px] uppercase tracking-wider">
-                    <span>Chat Drawer</span>
-                    <span className="text-[9px] text-[#78786C] font-semibold bg-[#2C2C24] px-2 py-0.5 rounded-full">Keyboard Supported</span>
-                  </div>
-
-                  {/* Model selector — same picker as the home assistant, kept in sync */}
-                  <div className="px-6 py-3 border-b border-[#2C2C24] bg-[#1A1A14]/60">
-                    <ModelSelector value={voice.modelProvider} onChange={voice.setModelProvider} />
-                  </div>
-
-                  {/* Chat conversations area */}
-                  <div className="flex-1 min-h-0 overflow-hidden">
-                    <ChatArea
-                      messages={voice.messages} 
-                      isAiThinking={voice.isAiThinking} 
-                      interimTranscript={voice.interimTranscript} 
-                    />
-                  </div>
-
-                  {/* Manual Text Input form */}
-                  <form onSubmit={handleTextSubmit} className="p-5 border-t border-[#2C2C24] bg-[#1A1A14] flex gap-3">
-                    <input
-                      type="text"
-                      placeholder="Ask recipe questions..."
-                      value={textInput}
-                      onChange={(e) => setTextInput(e.target.value)}
-                      className="flex-1 bg-[#2C2C24] border border-[#4A4A40] rounded-full px-5 py-3 text-sm text-[#F3F4F1] focus:outline-none focus:border-[#5D7052] transition-all duration-300 placeholder:text-[#78786C] shadow-inner"
-                    />
-                    <button
-                      type="submit"
-                      className="bg-[#5D7052] hover:bg-[#5D7052]/90 text-[#F3F4F1] font-bold px-5 py-3 rounded-full text-xs uppercase tracking-wider transition-all duration-300 cursor-pointer active:scale-95 shadow-soft"
-                    >
-                      Send
-                    </button>
-                  </form>
-                </div>
               </div>
-
-              {/* Active Timers overlays */}
-              <div className="absolute top-24 right-8 z-30">
-                <TimerWidget 
-                  timers={timers.timers} 
-                  onCancel={timers.removeTimer} 
-                  onAddSeconds={timers.addTimeToTimer}
-                />
-              </div>
-
-              {/* Background ambient lighting */}
-              <div className="absolute top-1/4 left-1/4 w-[500px] h-[500px] bg-[#5D7052]/10 rounded-full blur-[120px] pointer-events-none blob-1" />
-              <div className="absolute bottom-1/4 right-1/4 w-[500px] h-[500px] bg-[#C18C5D]/10 rounded-full blur-[120px] pointer-events-none blob-2" />
             </div>
           )
         )}
+
       </main>
 
       {/* Floating launcher for the home chat assistant */}
@@ -1835,6 +2017,12 @@ export default function App() {
       <HistoryPanel
         isOpen={showHistoryPanel}
         onClose={() => setShowHistoryPanel(false)}
+        entries={cookingHistory}
+        recipes={recipes}
+        onSelectRecipe={(recipe) => {
+          setShowHistoryPanel(false);
+          handlePickRecipe(recipe);
+        }}
       />
 
       <ShoppingListPanel
