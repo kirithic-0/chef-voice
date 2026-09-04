@@ -134,6 +134,19 @@ def test_real_query_still_returns_results():
     assert results[0]["title"] == "Classic Butter Chicken"
 
 
+def test_keyword_query_does_not_return_the_whole_catalog():
+    """A specific keyword search must not drag in every food that clears the low dense floor.
+
+    'chicken' scored the pasta and the rice above MIN_DENSE_SCORE on cosine alone (MiniLM rates
+    most savoury food ~0.2-0.3 against any single ingredient), so before the relative/lexical
+    cutoffs a one-word search returned the entire fixture. The two dishes that share no keyword
+    with 'chicken' must now be pruned as the semantic tail, leaving only the real match.
+    """
+    results = retrieval.search("chicken", limit=6)
+    titles = [r["title"] for r in results]
+    assert titles == ["Classic Butter Chicken"], titles
+
+
 # --------------------------------------------------------------------------- #
 # Pre-filtering
 # --------------------------------------------------------------------------- #
@@ -153,10 +166,50 @@ def test_max_time_filter():
     assert quick and all(r["time"] <= 20 for r in quick)
 
 
+def test_min_time_filter():
+    """"Longer than 20 minutes" is a numeric filter, not a semantic one — embeddings cannot
+    answer greater-than, so this bound has to exist as a real filter or the query silently
+    returns quick recipes anyway."""
+    slow = retrieval.search("food", limit=10, filters=retrieval.Filters(min_time=21))
+    assert slow and all(r["time"] >= 21 for r in slow)
+
+
+def test_min_and_max_time_bracket_a_range():
+    """Both bounds compose: '20 to 40 minutes' keeps only the middle band."""
+    mid = retrieval.search("food", limit=10, filters=retrieval.Filters(min_time=21, max_time=40))
+    assert mid and all(21 <= r["time"] <= 40 for r in mid)
+
+
 def test_search_endpoint_accepts_filters():
     response = client.get("/recipes/search", params={"query": "pasta", "is_veg": True})
     assert response.status_code == 200
     assert all(r["is_veg"] for r in response.json())
+
+
+def test_search_endpoint_accepts_min_time():
+    response = client.get("/recipes/search", params={"query": "food", "min_time": 21})
+    assert response.status_code == 200
+    assert all(r["time"] >= 21 for r in response.json())
+
+
+def test_search_tool_coerces_string_time_args():
+    """Some models emit the time as a string ({"min_time": "21"}). Left uncoerced it reaches
+    Filters.matches() and raises on `int(recipe_time) < "21"`. The tool must coerce, so the
+    filter still applies and the turn does not blow up mid-conversation."""
+    import asyncio
+    import tools
+
+    ctx = tools.ToolContext(
+        cooking_state={"screen": "home", "recipe": None, "current_step": 0, "timers": []},
+        user_id="test-user",
+        http_client=None,
+        embedding_model=main.embedding_model,
+        llm_api_key="test",
+        llm_model="test",
+    )
+    out = asyncio.run(tools.tool_search_recipes({"query": "recipes", "min_time": "21"}, ctx))
+    times = [r["time"] for r in out["results"]]
+    assert times and all(t >= 21 for t in times), times
 
 
 def test_dietary_filter_requires_every_tag():

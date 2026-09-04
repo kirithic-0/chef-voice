@@ -63,6 +63,29 @@ import database as db
 MIN_DENSE_SCORE = float(os.getenv("SEARCH_MIN_SCORE", "0.18"))
 MIN_CORROBORATED_SCORE = float(os.getenv("SEARCH_MIN_CORROBORATED_SCORE", "0.12"))
 
+# Relative cutoffs — precision on top of the absolute floors above.
+#
+# The absolute floor answers "is this good enough to show at all"; it cannot answer "is this
+# still relevant given how strong the BEST match was". MiniLM puts most of a food catalog in the
+# 0.18-0.30 cosine band against almost any single-ingredient query ("chicken" scores Veggie
+# Fried Rice at 0.28), so the absolute floor alone lets the catalog flood in behind the two or
+# three real matches. These two ratios cut that tail. Both are measured against the query's own
+# top score, so they adapt to the query instead of assuming a fixed scale.
+#
+# REL_FLOOR_RATIO: every result must reach this fraction of the top dense score. Calibrated
+# from the golden set, whose weakest true positive sits at 0.508 of its query's top ("a fast
+# weeknight dinner" -> Aglio e Olio); 0.45 stays safely below that so no judged answer is cut,
+# while still trimming the low tail of vague queries.
+#
+# LEX_ANCHOR_RATIO: the keyword-query fix. When a query produces lexical (BM25) matches, the
+# real answers are the ones that share its words; a candidate that matches NO keyword and scores
+# well under the best keyword match is riding the low absolute floor and is almost always
+# off-topic. Such dense-only candidates must reach this fraction of the best lexically-matched
+# result's dense score. Queries with no lexical matches at all (pure vague-semantic) are
+# untouched by this rule — they fall to the cross-encoder work still to come.
+REL_FLOOR_RATIO = float(os.getenv("SEARCH_REL_FLOOR_RATIO", "0.45"))
+LEX_ANCHOR_RATIO = float(os.getenv("SEARCH_LEX_ANCHOR_RATIO", "0.75"))
+
 # Fusion depth: how many candidates each retriever contributes before fusion. Wider than the
 # final k so a result the dense side ranks 12th can still be rescued by the lexical side.
 CANDIDATE_DEPTH = int(os.getenv("SEARCH_CANDIDATE_DEPTH", "30"))
@@ -119,11 +142,19 @@ _SYNONYMS = {
 
 @dataclass
 class Filters:
-    """Metadata constraints applied before ranking. Every field is optional."""
+    """Metadata constraints applied before ranking. Every field is optional.
+
+    Time is a NUMERIC constraint, not a semantic one. "Under 20 minutes" / "longer than half an
+    hour" cannot be answered by embedding similarity — the model has no notion of greater-than,
+    even though the document text contains "45 minutes" — so both bounds live here as real
+    filters. `min_time`/`max_time` are inclusive: a 30-minute recipe matches min_time=30 and
+    max_time=30. A caller wanting a strict "more than 20" passes min_time=21.
+    """
     is_veg: Optional[bool] = None
     category: Optional[str] = None
     cuisine: Optional[str] = None
     difficulty: Optional[str] = None
+    min_time: Optional[int] = None
     max_time: Optional[int] = None
     dietary: Optional[list[str]] = None
 
@@ -131,7 +162,7 @@ class Filters:
         return any(
             value is not None
             for value in (self.is_veg, self.category, self.cuisine,
-                          self.difficulty, self.max_time, self.dietary)
+                          self.difficulty, self.min_time, self.max_time, self.dietary)
         )
 
     def matches(self, recipe: dict) -> bool:
@@ -142,6 +173,8 @@ class Filters:
         if self.cuisine and (recipe.get("cuisine") or "").lower() != self.cuisine.lower():
             return False
         if self.difficulty and (recipe.get("difficulty") or "").lower() != self.difficulty.lower():
+            return False
+        if self.min_time is not None and int(recipe.get("time") or 0) < self.min_time:
             return False
         if self.max_time is not None and int(recipe.get("time") or 0) > self.max_time:
             return False
@@ -352,6 +385,28 @@ def search(
         if not filters.matches(recipe):
             continue
         candidates.append((recipe_id, fused_score, dense_score, lexical_score))
+
+    # Relative pruning — precision on top of the absolute floor. Both anchors are taken over the
+    # candidates that already cleared the floor and filters, so nonsense (which clears neither)
+    # still returns nothing and noise rejection is untouched.
+    if candidates:
+        top_dense = max(row[2] for row in candidates)
+        lex_dense = [row[2] for row in candidates if row[3] is not None]
+        best_lex_dense = max(lex_dense) if lex_dense else None
+        rel_floor = REL_FLOOR_RATIO * top_dense
+        lex_anchor = LEX_ANCHOR_RATIO * best_lex_dense if best_lex_dense is not None else None
+
+        pruned = []
+        for recipe_id, fused_score, dense_score, lexical_score in candidates:
+            # Too far below the strongest match for this query to still be about it.
+            if dense_score < rel_floor:
+                continue
+            # Keyword query, but this candidate shares none of the keywords and sits well below
+            # the ones that do — the semantic tail, not a real match.
+            if lex_anchor is not None and lexical_score is None and dense_score < lex_anchor:
+                continue
+            pruned.append((recipe_id, fused_score, dense_score, lexical_score))
+        candidates = pruned
 
     # Ties on the primary score fall back to the catalog's own quality signal rather than to
     # whatever order the dict happened to produce.

@@ -58,10 +58,11 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "name": "search_recipes",
             "description": (
                 "Hybrid semantic + keyword search over the recipe catalog. Use when the user "
-                "wants to find or browse recipes. Pass is_veg or max_time when the user states "
-                "such a constraint — they filter the catalog properly, which describing them "
-                "in the query text does not. Returns nothing when no recipe is a real match; "
-                "say so rather than inventing one."
+                "wants to find or browse recipes. Pass is_veg, min_time or max_time when the user "
+                "states such a constraint — they filter the catalog properly, which describing "
+                "them in the query text does not (a time limit especially: the search cannot "
+                "compare durations from the query text, only from these fields). Returns nothing "
+                "when no recipe is a real match; say so rather than inventing one."
             ),
             "parameters": {
                 "type": "object",
@@ -71,9 +72,21 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                         "type": "boolean",
                         "description": "True for vegetarian only, false for non-vegetarian only. Omit if unstated.",
                     },
+                    "min_time": {
+                        "type": "integer",
+                        "description": (
+                            "Minimum total cooking time in minutes; keeps recipes at least this long. "
+                            "Use for 'longer/more than', 'over', 'at least'. Inclusive, so for a strict "
+                            "'more than 20 minutes' pass 21, and for 'at least 20' pass 20. Omit if unstated."
+                        ),
+                    },
                     "max_time": {
                         "type": "integer",
-                        "description": "Maximum total cooking time in minutes. Omit if unstated.",
+                        "description": (
+                            "Maximum total cooking time in minutes; keeps recipes no longer than this. "
+                            "Use for 'under', 'less than', 'within', 'quick'. Inclusive, so for a strict "
+                            "'under 20 minutes' pass 19. Omit if unstated."
+                        ),
                     },
                 },
                 "required": ["query"],
@@ -416,9 +429,22 @@ async def tool_search_recipes(args: dict, ctx: ToolContext) -> dict:
     if not query:
         return {"results": []}
 
+    # Models are inconsistent about types: some emit {"min_time": 21}, others
+    # {"min_time": "20"}. A string here would reach Filters.matches() and raise on
+    # `int(recipe_time) < "20"`, so coerce to int and drop anything unparseable.
+    def _as_minutes(value: Any) -> Optional[int]:
+        if value is None:
+            return None
+        try:
+            minutes = int(float(value))
+        except (TypeError, ValueError):
+            return None
+        return minutes if minutes > 0 else None
+
     filters = retrieval.Filters(
         is_veg=args.get("is_veg"),
-        max_time=args.get("max_time"),
+        min_time=_as_minutes(args.get("min_time")),
+        max_time=_as_minutes(args.get("max_time")),
     )
     results = await run_in_threadpool(
         lambda: retrieval.search(query, limit=6, filters=filters)

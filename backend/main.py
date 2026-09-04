@@ -221,6 +221,7 @@ async def search_recipes(
     category: str | None = None,
     cuisine: str | None = None,
     difficulty: str | None = None,
+    min_time: int | None = None,
     max_time: int | None = None,
     dietary: str | None = None,
     mode: str = "hybrid",
@@ -240,6 +241,7 @@ async def search_recipes(
         category=category,
         cuisine=cuisine,
         difficulty=difficulty,
+        min_time=min_time,
         max_time=max_time,
         # Comma-separated, ALL must be present: "Vegan,Gluten-free" means both tags.
         dietary=[tag.strip() for tag in dietary.split(",") if tag.strip()] if dietary else None,

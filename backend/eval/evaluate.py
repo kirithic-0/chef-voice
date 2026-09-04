@@ -51,6 +51,24 @@ def recall_at_k(ranked_ids: list[str], relevant_ids: set[str], k: int) -> float:
     return hits / min(len(relevant_ids), k)
 
 
+def precision_at_k(ranked_ids: list[str], relevant_ids: set[str], k: int) -> float:
+    """Fraction of the top-k that is relevant, measured against what was actually returned.
+
+    Unlike recall, this penalises padding a short answer with junk. It is the metric that a
+    catalog-floods-in-behind-the-real-match failure shows up in — the one a
+    recall/MRR/nDCG-only harness is blind to, which is how a 0.26-precision pipeline once
+    looked healthy on every number reported. Denominator is min(k, results returned), so a
+    query that correctly returns two good answers scores 1.0 rather than being punished for not
+    filling k slots.
+    """
+    if not relevant_ids:
+        return 0.0
+    topk = ranked_ids[:k]
+    if not topk:
+        return 0.0
+    return len(set(topk) & relevant_ids) / len(topk)
+
+
 def reciprocal_rank(ranked_ids: list[str], relevant_ids: set[str]) -> float:
     for position, recipe_id in enumerate(ranked_ids, start=1):
         if recipe_id in relevant_ids:
@@ -193,6 +211,8 @@ def run_config(name: str, queries: list[dict]) -> dict:
             "id": entry["id"],
             "mrr": reciprocal_rank(ranked_ids, relevant),
             "ndcg": ndcg_at_k(ranked_ids, entry["grades"], NDCG_K),
+            "precision@5": precision_at_k(ranked_ids, relevant, 5),
+            "results_returned": len(ranked_ids),
         }
         for k in K_VALUES:
             row[f"recall@{k}"] = recall_at_k(ranked_ids, relevant, k)
@@ -212,6 +232,8 @@ def run_config(name: str, queries: list[dict]) -> dict:
         "queries_scored": len(scored),
         "mrr": mean("mrr"),
         f"ndcg@{NDCG_K}": mean("ndcg"),
+        "precision@5": mean("precision@5"),
+        "avg_results": mean("results_returned"),
         **{f"recall@{k}": mean(f"recall@{k}") for k in K_VALUES},
         "noise_rejection": (noise_correct / noise_total) if noise_total else 0.0,
         "noise_correct": noise_correct,
@@ -222,7 +244,7 @@ def run_config(name: str, queries: list[dict]) -> dict:
     }
 
 
-METRIC_COLUMNS = ["recall@1", "recall@3", "recall@5", "mrr", f"ndcg@{NDCG_K}", "noise_rejection"]
+METRIC_COLUMNS = ["recall@3", "recall@5", "precision@5", "mrr", f"ndcg@{NDCG_K}", "noise_rejection"]
 
 
 def print_table(rows: list[dict], baseline: dict | None = None) -> None:
@@ -247,6 +269,7 @@ def print_table(rows: list[dict], baseline: dict | None = None) -> None:
         print(
             f"{'':12} noise rejected {row['noise_correct']}/{row['noise_total']}"
             f" · {row['queries_scored']} judged queries"
+            f" · avg {row['avg_results']:.1f} results/query"
         )
 
 
