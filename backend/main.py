@@ -585,11 +585,11 @@ async def websocket_chat(client_ws: WebSocket):
             print(f"Error processing AI response: {type(e).__name__}: {e!r}")
             err = str(e)
             # The agent surfaces LLM HTTP errors as RuntimeError("LLM error <code>: ...").
-            # Give a clear message for rate limits (esp. OpenRouter's free daily cap).
+            # Give a clear message for rate limits (free tiers have a daily cap).
             if "429" in err or "rate limit" in err.lower():
                 if "free-models-per-day" in err or "free_tier_daily" in err:
                     msg = (f"{provider['label']} has hit its free daily request limit. "
-                           f"Switch to Llama, add OpenRouter credits, or try again after the daily reset.")
+                           f"Switch models or try again after the daily reset.")
                 else:
                     msg = f"{provider['label']} rate limit reached. Please wait a few seconds and try again."
                 await client_ws.send_json({"type": "error", "message": msg})
