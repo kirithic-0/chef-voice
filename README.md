@@ -1,6 +1,6 @@
 # ChefVoice App
 
-![ChefVoice Dashboard](./docs/screenshot.png)
+![ChefVoice home screen](./docs/screenshots/01-home.jpg)
 
 A voice-first AI cooking assistant with real-time audio streaming, semantic recipe search, and a conversational web UI.
 
@@ -26,11 +26,20 @@ Navigate cooking steps hands-free, set smart timers, ask questions about ingredi
 
 ---
 
+## Screenshots
+
+| | |
+| --- | --- |
+| ![Assistant chat](./docs/screenshots/02-assistant.jpg) **Assistant** — the agent calls its search tool (shown as a chip), speaks the answer, and attaches the matching recipes. | ![Cooking mode](./docs/screenshots/04-cooking.png) **Cooking mode** — hands-free steps, a voice-set named timer, and the conversation alongside. |
+| ![Recipe detail](./docs/screenshots/03-detail.jpg) **Recipe detail** — ingredients checklist and one-tap voice-guided cooking. | ![Admin portal](./docs/screenshots/05-admin.png) **Admin portal** — create recipes or import one from a URL; new recipes are embedded and searchable immediately. |
+
+---
+
 ## Getting Started
 
 ### Prerequisites
-* Python 3.9+
-* Node.js 16+ and npm
+* Python 3.10+ (tested on 3.11 and 3.13)
+* Node.js 20.19+ or 22.12+ and npm (required by Vite 8)
 * API keys for the voice pipeline (optional — everything except the live voice assistant works without them):
   [Deepgram](https://deepgram.com/) (speech-to-text) and [Groq](https://console.groq.com/) (the default tool-calling agent).
   Text-to-speech uses the browser, so no TTS key is needed.
@@ -41,6 +50,8 @@ Navigate cooking steps hands-free, set smart timers, ask questions about ingredi
   Keep `ollama serve` running and pick **Gemma** in the model selector. A 26B model won't fully fit a 12 GB GPU, so Ollama offloads the overflow layers to system RAM automatically.
 
 There is **no database server to install** — the app creates a local SQLite file on first run.
+
+On a fresh machine, expect the Python install to download about 1 GB (mostly PyTorch) and the first run to download the `all-MiniLM-L6-v2` embedding model (~90 MB). API keys live only in `backend/.env`, which is not committed, so bring your own keys or a copy of your `.env`.
 
 ### Local Development
 
@@ -120,7 +131,7 @@ There is **no database server to install** — the app creates a local SQLite fi
 #### Backend
 | Technology | Purpose |
 | --- | --- |
-| **Python 3.9+** | Runtime language |
+| **Python 3.10+** | Runtime language |
 | **FastAPI** | Async web framework with robust WebSocket support |
 | **SQLite** | Zero-config, single-file relational database |
 | **Sentence-Transformers** | Local embedding generation (`all-MiniLM-L6-v2`) |
