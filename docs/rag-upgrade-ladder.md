@@ -72,7 +72,7 @@ Each row was reproduced against the live database, not reasoned about.
 | 10 | **No evaluation.** No golden set, no metrics, no baseline. | Every improvement below is currently unfalsifiable |
 | 11 | **`match_count` hardcoded to 6** in both callers | [main.py:216](backend/main.py:216), [tools.py:397](backend/tools.py:397) |
 | 12 | **The catalog is too small to measure anything.** 15 recipes in 5 categories of 3. | Recall@5 saturates near 1.0 for any sensible query — hybrid and reranking have no headroom to demonstrate a win |
-| 13 | **Personalization data is collected and ignored.** `favorites`, `cooking_history`, `average_rating`, `user_memories` all exist and never touch ranking. | — |
+| 13 | **Personalization data is collected and ignored.** `favorites`, `cooking_history`, `average_rating` all exist and never touch ranking. | — |
 
 ### 1.3 What is already good
 
@@ -259,7 +259,7 @@ TF-only scoring that looks like it works and quietly underperforms.
 |---|---|---|---|
 | 5a | **Structured filter extraction** — "veg pasta under 30 min" → `{query: "pasta", is_veg: true, max_time: 30}` | 4 h | **HTTP search path only.** See the latency note below. |
 | 5b | **Conversational query rewrite** — resolve "make it vegetarian" against the previous turn | 3 h | Voice-specific; the agent's tool arg loses this context today |
-| 5c | **Personalization re-ranking** — boost by the user's `cooking_history`, `favorites`, `average_rating`, `user_memories` | 1 d | The data is already collected and already ignored |
+| 5c | **Personalization re-ranking** — boost by the user's `cooking_history`, `favorites`, `average_rating` | 1 d | The data is already collected and already ignored |
 | 5d | **Multi-query expansion** — generate 2–3 paraphrases, retrieve each, fuse | 4 h | Recall gain, latency cost |
 | 5e | **HyDE** — embed a hypothetical answer instead of the query | 4 h | Highest latency cost of the group; measure before keeping |
 | 5f | **Negation handling** — "pasta without garlic" currently retrieves garlic pasta | 4 h | Dense embeddings are notoriously bad at this; needs a filter, not a vector |

@@ -17,40 +17,6 @@ from fastapi.concurrency import run_in_threadpool
 import database as db
 import retrieval
 
-# --- Unit conversion tables (kitchen) ---
-VOLUME_TO_ML = {
-    "ml": 1.0,
-    "milliliter": 1.0,
-    "milliliters": 1.0,
-    "l": 1000.0,
-    "liter": 1000.0,
-    "liters": 1000.0,
-    "tsp": 4.92892,
-    "teaspoon": 4.92892,
-    "teaspoons": 4.92892,
-    "tbsp": 14.7868,
-    "tablespoon": 14.7868,
-    "tablespoons": 14.7868,
-    "cup": 236.588,
-    "cups": 236.588,
-    "fl oz": 29.5735,
-    "floz": 29.5735,
-    "oz": 29.5735,  # fluid oz in kitchen voice context unless marked weight
-}
-
-WEIGHT_TO_G = {
-    "g": 1.0,
-    "gram": 1.0,
-    "grams": 1.0,
-    "kg": 1000.0,
-    "oz": 28.3495,
-    "ounce": 28.3495,
-    "ounces": 28.3495,
-    "lb": 453.592,
-    "pound": 453.592,
-    "pounds": 453.592,
-}
-
 TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "type": "function",
@@ -274,75 +240,6 @@ class ToolContext:
     extra_body: dict[str, Any] = field(default_factory=dict)
     final_extra_body: dict[str, Any] = field(default_factory=dict)
     ui_actions: list[dict[str, Any]] = field(default_factory=list)
-
-
-def parse_amount(amount: Any) -> Optional[float]:
-    if amount is None:
-        return None
-    if isinstance(amount, (int, float)):
-        return float(amount)
-    s = str(amount).strip().lower()
-    if not s or s in {"to serve", "to taste", "as needed"}:
-        return None
-    # fractions like 1/2 or 1 1/2
-    mixed = re.match(r"^(\d+)\s+(\d+)/(\d+)$", s)
-    if mixed:
-        whole, num, den = mixed.groups()
-        return float(whole) + (float(num) / float(den))
-    frac = re.match(r"^(\d+)/(\d+)$", s)
-    if frac:
-        num, den = frac.groups()
-        return float(num) / float(den)
-    try:
-        return float(s)
-    except ValueError:
-        m = re.search(r"(\d+(\.\d+)?)", s)
-        return float(m.group(1)) if m else None
-
-
-def format_amount(value: float) -> str:
-    if abs(value - round(value)) < 1e-6:
-        return str(int(round(value)))
-    # simple quarters
-    for den in (2, 3, 4, 8):
-        num = round(value * den)
-        if abs(value - (num / den)) < 0.02:
-            if num > den:
-                whole = num // den
-                rem = num % den
-                return f"{whole} {rem}/{den}" if rem else str(whole)
-            return f"{num}/{den}"
-    return f"{value:.2f}".rstrip("0").rstrip(".")
-
-
-def scale_ingredients(ingredients: list[dict], base_servings: int, new_servings: int) -> list[dict]:
-    if base_servings <= 0:
-        base_servings = 1
-    ratio = new_servings / base_servings
-    scaled = []
-    for ing in ingredients:
-        item = dict(ing)
-        amt = parse_amount(ing.get("amount"))
-        if amt is not None:
-            item["amount"] = format_amount(amt * ratio)
-        scaled.append(item)
-    return scaled
-
-
-def convert_units(amount: float, from_unit: str, to_unit: str, kind: str = "volume") -> dict[str, Any]:
-    fu = from_unit.strip().lower()
-    tu = to_unit.strip().lower()
-    table = VOLUME_TO_ML if kind == "volume" else WEIGHT_TO_G
-    if fu not in table or tu not in table:
-        return {"error": f"Unsupported units for {kind}: {from_unit} -> {to_unit}"}
-    base = amount * table[fu]
-    converted = base / table[tu]
-    return {
-        "amount": round(converted, 4),
-        "from": {"amount": amount, "unit": from_unit},
-        "to": {"amount": round(converted, 4), "unit": to_unit},
-        "kind": kind,
-    }
 
 
 def build_system_prompt(cooking_state: dict[str, Any]) -> str:

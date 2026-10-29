@@ -119,11 +119,6 @@ class ShoppingItemUpdate(BaseModel):
     checked: bool | None = None
 
 
-class MemoryCreate(BaseModel):
-    note: str
-    recipe_id: str | None = None
-
-
 class ImportRequest(BaseModel):
     url: str
 
@@ -352,7 +347,7 @@ def post_conversation(conv: ConversationCreate, user: dict = Depends(get_current
 
 
 # --------------------------------------------------------------------------- #
-# Shopping list endpoints (also driven by the agent's shopping-list tool)
+# Shopping list endpoints
 # --------------------------------------------------------------------------- #
 
 @app.get("/shopping-list")
@@ -384,23 +379,6 @@ def delete_shopping_item(item_id: str, user: dict = Depends(get_current_user)):
     if not db.delete_shopping_list_item(item_id, user["id"]):
         raise HTTPException(status_code=404, detail="Item not found")
     return {"status": "success"}
-
-
-# --------------------------------------------------------------------------- #
-# Memory endpoints (also driven by the agent's save_note / recall_memories tools)
-# --------------------------------------------------------------------------- #
-
-@app.get("/memories")
-def get_memories(recipe_id: str | None = None, limit: int = 20, user: dict = Depends(get_current_user)):
-    return db.list_memories(user["id"], recipe_id, limit)
-
-
-@app.post("/memories")
-def post_memory(memory: MemoryCreate, user: dict = Depends(get_current_user)):
-    note = memory.note.strip()
-    if not note:
-        raise HTTPException(status_code=400, detail="note is required")
-    return db.add_memory(user["id"], note, memory.recipe_id)
 
 
 # --------------------------------------------------------------------------- #
@@ -496,7 +474,6 @@ async def websocket_chat(client_ws: WebSocket):
         "recipe": None,
         "current_step": 0,
         "timers": [],
-        "tts_mode": "web_speech",
     }
 
     history = []
@@ -556,11 +533,9 @@ async def websocket_chat(client_ws: WebSocket):
             if not ai_reply:
                 ai_reply = "Sorry, I did not catch that. Could you say it again?"
 
+            # The browser speaks ai_text itself with the Web Speech API.
             await client_ws.send_json({"type": "ai_text", "text": ai_reply})
             history.append({"role": "assistant", "content": ai_reply})
-
-            # Web Speech only: the client speaks ai_text; no cloud TTS.
-            await client_ws.send_json({"type": "ai_audio_none"})
 
         except httpx.TimeoutException as te:
             print(f"Timeout processing AI response: {type(te).__name__}: {te!r}")

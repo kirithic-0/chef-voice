@@ -63,24 +63,21 @@ users (id) ─────┬── 1:1 ── profiles          (shared PK, CAS
                 ├── 1:N ── favorites          ─┐
                 ├── 1:N ── cooking_history     ─┤ all CASCADE
                 ├── 1:N ── conversations       ─┤ on user delete
-                ├── 1:N ── shopping_list_items ─┤
-                └── 1:N ── user_memories       ─┘
+                └── 1:N ── shopping_list_items ─┘
 
 recipes (id) ───┬── 1:N ── favorites          (CASCADE)
-                ├── 1:N ── cooking_history     (CASCADE)
-                └── 0:N ── user_memories       (SET NULL — note outlives recipe)
+                └── 1:N ── cooking_history     (CASCADE)
 ```
 
 | Table | Key columns | Notes |
 |-------|-------------|-------|
 | **users** | `id` PK, `username` UNIQUE, `password_hash` | Auth identity only (hashing lives in `auth.py`). |
 | **profiles** | `id` PK **and** FK→users(id) | 1:1 via shared PK. `is_admin` is 0/1. |
-| **recipes** | `id` PK | Shared catalogue. `time` in minutes; `dietary`/`ingredients`/`steps`/`embedding` are JSON; `embedding` = 384 floats; `average_rating`+`rating_count` denormalized. |
+| **recipes** | `id` PK | Shared catalogue. `time` in minutes; `dietary`/`ingredients`/`steps` are JSON; `embedding` = 384 float32 values stored as a BLOB; `average_rating`+`rating_count` denormalized. |
 | **favorites** | `UNIQUE(user_id, recipe_id)` | Join table; UNIQUE prevents double-favoriting. |
 | **cooking_history** | `user_id`, `recipe_id`, `rating` | One row per completed cook; `rating` feeds the recipe average. |
 | **conversations** | `user_id`, `messages` (JSON) | Saved voice-session transcripts. |
 | **shopping_list_items** | `user_id`, `name`, `checked` | Editable per-item list. |
-| **user_memories** | `user_id`, optional `recipe_id`, `note` | Free-text notes; `recipe_id` is `SET NULL` on recipe delete. |
 
 Conventions: **booleans are `INTEGER` 0/1** (`is_admin`, `checked`),
 **timestamps** default to `datetime('now')` (UTC text) at the DB level.
@@ -123,7 +120,6 @@ Three one-line wrappers keep every function terse and consistent:
 | **Cooking history** | `list_cooking_history`, `add_cooking_history` | List embeds the joined recipe per row; adding with a rating triggers a recompute. |
 | **Conversations** | `list_conversations`, `add_conversation` | `messages` JSON-encoded on write, decoded on read. |
 | **Shopping list** | `list_shopping_list`, `add/update/delete_shopping_list_item` | Update/delete scope by `id AND user_id` so users can't touch each other's items. |
-| **Memories** | `list_memories`, `add_memory` | Back the agent's `save_note` / `recall_memories` tools. |
 
 ---
 

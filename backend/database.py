@@ -115,14 +115,6 @@ CREATE TABLE IF NOT EXISTS shopping_list_items (
     checked    INTEGER NOT NULL DEFAULT 0,   -- 0 / 1 boolean
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
-
-CREATE TABLE IF NOT EXISTS user_memories (
-    id         TEXT PRIMARY KEY,
-    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    recipe_id  TEXT REFERENCES recipes(id) ON DELETE SET NULL,
-    note       TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
 """
 
 
@@ -658,7 +650,7 @@ def add_conversation(user_id: str, title: str, messages: list[dict[str, Any]]) -
 
 
 # --------------------------------------------------------------------------- #
-# Shopping list (used by the agent's add_to_shopping_list tool + REST API)
+# Shopping list (REST API)
 # --------------------------------------------------------------------------- #
 
 def _shopping_item_to_dict(row: sqlite3.Row) -> dict:
@@ -681,9 +673,8 @@ def add_shopping_list_item(
     """Add an item, or fold it into the matching one this user already has.
 
     Adding the same thing twice produced two identical rows, which is never what
-    someone shopping wants — and it happened easily, because the voice agent and
-    the panel both add items and neither knew about the other. Matching is on the
-    trimmed, case-insensitive name so "Tomatoes" and "tomatoes" are one entry.
+    someone shopping wants. Matching is on the trimmed, case-insensitive name so
+    "Tomatoes" and "tomatoes" are one entry.
 
     A repeat of an item that was already ticked off un-ticks it: asking for it
     again means it is wanted again.
@@ -758,34 +749,3 @@ def delete_shopping_list_item(item_id: str, user_id: str) -> bool:
         (item_id, user_id),
     )
     return cursor.rowcount > 0
-
-
-# --------------------------------------------------------------------------- #
-# User memories (used by the agent's save_note / recall_memories tools + REST API)
-# --------------------------------------------------------------------------- #
-
-def list_memories(user_id: str, recipe_id: Optional[str] = None, limit: int = 20) -> list[dict]:
-    if recipe_id:
-        rows = _query_all(
-            """
-            SELECT * FROM user_memories
-            WHERE user_id = ? AND recipe_id = ?
-            ORDER BY created_at DESC LIMIT ?
-            """,
-            (user_id, recipe_id, limit),
-        )
-    else:
-        rows = _query_all(
-            "SELECT * FROM user_memories WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
-            (user_id, limit),
-        )
-    return [dict(r) for r in rows]
-
-
-def add_memory(user_id: str, note: str, recipe_id: Optional[str] = None) -> dict:
-    mem_id = new_id()
-    _execute(
-        "INSERT INTO user_memories (id, user_id, recipe_id, note) VALUES (?, ?, ?, ?)",
-        (mem_id, user_id, recipe_id, note),
-    )
-    return dict(_query_one("SELECT * FROM user_memories WHERE id = ?", (mem_id,)))

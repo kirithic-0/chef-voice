@@ -151,9 +151,9 @@ On a fresh machine, expect the Python install to download about 1 GB (mostly PyT
 
 ### Data Layer
 All persistence lives in a single SQLite file (`backend/chefvoice.db`) with tables for
-`users`, `profiles`, `recipes`, `favorites`, `cooking_history`, `conversations`,
-`shopping_list_items`, and `user_memories`.
-List/array fields and the 384-dimension embeddings are stored as JSON text. Search
+`users`, `profiles`, `recipes`, `favorites`, `cooking_history`, `conversations`, and
+`shopping_list_items`, plus the `recipes_fts` full-text index.
+List/array fields are stored as JSON text and the 384-dimension embeddings as float32 BLOBs. Search
 (`retrieval.py`) keeps the embeddings in memory as one normalized matrix and fuses its
 cosine-similarity ranking with an FTS5 BM25 keyword index — no external vector database required. Per-user data isolation is enforced in the API
 layer by scoping every query to the authenticated user id from the JWT.
@@ -194,7 +194,6 @@ All REST endpoints require an `Authorization: Bearer <jwt>` header.
 | `/conversations` | `GET` / `POST` | Fetch or save voice-session transcripts |
 | `/shopping-list` | `GET` / `POST` | List or add shopping-list items |
 | `/shopping-list/{id}` | `PATCH` / `DELETE` | Update or remove a shopping-list item |
-| `/memories` | `GET` / `POST` | List or save cooking notes/memories |
 | `/recipes/import` | `POST` | Import a recipe from a URL (the agent scrapes, extracts, and embeds it) |
 
 ---

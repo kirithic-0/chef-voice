@@ -74,7 +74,6 @@ export default function App() {
   const [showProfilePanel, setShowProfilePanel] = useState(false);
   const [showHistoryPanel, setShowHistoryPanel] = useState(false);
   const [showShoppingList, setShowShoppingList] = useState(false);
-  const [shoppingRefreshKey, setShoppingRefreshKey] = useState(0);
   const [importUrl, setImportUrl] = useState('');
   const [importing, setImporting] = useState(false);
 
@@ -194,14 +193,6 @@ export default function App() {
     const updated = [...adminSteps];
     updated[index] = { ...updated[index], [field]: value };
     setAdminSteps(updated);
-  };
-
-  const handleDietaryToggle = (tag: string) => {
-    if (adminDietary.includes(tag)) {
-      setAdminDietary(adminDietary.filter(t => t !== tag));
-    } else {
-      setAdminDietary([...adminDietary, tag]);
-    }
   };
 
   const handlePublishRecipe = async (e: React.FormEvent) => {
@@ -482,7 +473,6 @@ export default function App() {
       recipe: selectedRecipe,
       current_step: currentStep,
       timers: timers.timers,
-      tts_mode: 'web_speech',
     });
   }, [view, selectedRecipe, currentStep, timers.timers, userProfile]);
 
@@ -881,12 +871,6 @@ export default function App() {
       ...prev,
       [name]: !prev[name]
     }));
-  };
-
-  const selectRandomRecipe = () => {
-    if (recipes.length === 0) return;
-    const randIdx = Math.floor(Math.random() * recipes.length);
-    handleSelectRecipe(recipes[randIdx]);
   };
 
   const handleTextSubmit = (e: React.FormEvent) => {
@@ -2028,7 +2012,6 @@ export default function App() {
       <ShoppingListPanel
         isOpen={showShoppingList}
         onClose={() => setShowShoppingList(false)}
-        refreshKey={shoppingRefreshKey}
       />
 
       {/* Resume-cooking prompt: offered once on load if a cook was left unfinished */}

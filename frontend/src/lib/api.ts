@@ -6,7 +6,6 @@ import {
   AppSession,
   AuthUser,
   ShoppingListItem,
-  UserMemory,
   ProviderInfo,
 } from '../types';
 
@@ -351,25 +350,6 @@ export async function deleteShoppingListItem(id: string): Promise<void> {
     headers: authHeaders(),
   });
   await parse(response, 'Failed to delete shopping list item');
-}
-
-// --------------------------------------------------------------------------- //
-// Memories (also written by the voice agent's save-note tool)
-// --------------------------------------------------------------------------- //
-
-export async function fetchMemories(recipeId?: string): Promise<UserMemory[]> {
-  const qs = recipeId ? `?recipe_id=${encodeURIComponent(recipeId)}` : '';
-  const response = await fetch(`${API_BASE_URL}/memories${qs}`, { headers: authHeaders() });
-  return parse(response, 'Failed to fetch memories');
-}
-
-export async function createMemory(note: string, recipeId?: string): Promise<UserMemory> {
-  const response = await fetch(`${API_BASE_URL}/memories`, {
-    method: 'POST',
-    headers: authHeaders(),
-    body: JSON.stringify({ note, recipe_id: recipeId }),
-  });
-  return parse(response, 'Failed to save memory');
 }
 
 // --------------------------------------------------------------------------- //

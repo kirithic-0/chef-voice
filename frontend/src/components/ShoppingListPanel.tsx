@@ -10,10 +10,9 @@ import {
 interface ShoppingListPanelProps {
   isOpen: boolean;
   onClose: () => void;
-  refreshKey?: number;
 }
 
-export default function ShoppingListPanel({ isOpen, onClose, refreshKey = 0 }: ShoppingListPanelProps) {
+export default function ShoppingListPanel({ isOpen, onClose }: ShoppingListPanelProps) {
   const [items, setItems] = useState<ShoppingListItem[]>([]);
   const [name, setName] = useState('');
   const [loading, setLoading] = useState(false);
@@ -32,7 +31,7 @@ export default function ShoppingListPanel({ isOpen, onClose, refreshKey = 0 }: S
 
   useEffect(() => {
     if (isOpen) load();
-  }, [isOpen, refreshKey]);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 

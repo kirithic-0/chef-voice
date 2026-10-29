@@ -78,9 +78,6 @@ export interface VoiceAction {
     | 'search_recipes'
     | 'select_recipe'
     | 'start_cooking'
-    | 'scale_recipe'
-    | 'shopping_list_updated'
-    | 'memory_saved'
     | 'recipe_imported'
     | 'none';
   params?: {
@@ -89,11 +86,7 @@ export interface VoiceAction {
     query?: string;
     id?: string;
     step_index?: number;
-    servings?: number;
-    ingredients?: Ingredient[];
     results?: Recipe[];
-    item?: ShoppingListItem;
-    memory?: UserMemory;
     recipe?: Recipe;
   };
 }
@@ -123,14 +116,6 @@ export interface ShoppingListItem {
   quantity: string;
   unit: string;
   checked: boolean;
-  created_at?: string;
-}
-
-export interface UserMemory {
-  id: string;
-  user_id: string;
-  recipe_id?: string | null;
-  note: string;
   created_at?: string;
 }
 

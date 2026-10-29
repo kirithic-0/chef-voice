@@ -54,7 +54,6 @@ export function useVoiceChat() {
   const [isAiThinking, setIsAiThinking] = useState(false);
   const [status, setStatus] = useState<'idle' | 'connecting' | 'recording' | 'isAiThinking' | 'isAiSpeaking'>('idle');
   const [interimTranscript, setInterimTranscript] = useState('');
-  const [ttsMode, setTtsMode] = useState<'web_speech'>('web_speech');
   // Which LLM backend the agent uses this session ('llama' = Groq,
   // 'local' = on-device Gemma via Ollama).
   // Chosen in the assistant's model selector.
@@ -72,15 +71,8 @@ export function useVoiceChat() {
   const reconnectAttemptsRef = useRef(0);
   const isStoppedManuallyRef = useRef(false);
 
-  // PCM Streaming Audio Player states
-  const audioQueueRef = useRef<Float32Array[]>([]);
-  const isPlayingAudioRef = useRef(false);
-  const activeSourcesRef = useRef<AudioBufferSourceNode[]>([]);
-  const hasReceivedAudioEndRef = useRef(false);
-
   const isAiThinkingRef = useRef(false);
   const isAiSpeakingRef = useRef(false);
-  const ttsModeRef = useRef<'web_speech'>('web_speech');
   const modelProviderRef = useRef<ModelProvider>('llama');
 
   useEffect(() => {
@@ -92,104 +84,16 @@ export function useVoiceChat() {
   }, [isAiSpeaking]);
 
   useEffect(() => {
-    ttsModeRef.current = ttsMode;
-  }, [ttsMode]);
-
-  useEffect(() => {
     modelProviderRef.current = modelProvider;
   }, [modelProvider]);
 
-  // Decode Base64 to Int16Array
-  const base64ToInt16Array = (base64: string): Int16Array => {
-    const binaryString = window.atob(base64);
-    const len = binaryString.length;
-    const bytes = new Uint8Array(len);
-    for (let i = 0; i < len; i++) {
-      bytes[i] = binaryString.charCodeAt(i);
-    }
-    return new Int16Array(bytes.buffer);
-  };
-
-  // Convert Int16 raw PCM to Float32 array
-  const int16ToFloat32 = (int16Array: Int16Array): Float32Array => {
-    const float32Array = new Float32Array(int16Array.length);
-    for (let i = 0; i < int16Array.length; i++) {
-      float32Array[i] = int16Array[i] / 32768.0;
-    }
-    return float32Array;
-  };
-
-  // Play next PCM audio chunk in the queue
-  const playNextChunk = () => {
-    if (!audioContextRef.current) return;
-    
-    const queue = audioQueueRef.current;
-    if (queue.length === 0) {
-      isPlayingAudioRef.current = false;
-      if (hasReceivedAudioEndRef.current) {
-        setIsAiSpeaking(false);
-        setStatus('recording');
-        hasReceivedAudioEndRef.current = false;
-      }
-      return;
-    }
-
-    isPlayingAudioRef.current = true;
-    const float32Data = queue.shift()!;
-    
-    try {
-      const audioCtx = audioContextRef.current;
-      const audioBuffer = audioCtx.createBuffer(1, float32Data.length, 16000); // 16kHz raw PCM
-      audioBuffer.copyToChannel(float32Data as any, 0);
-
-      const source = audioCtx.createBufferSource();
-      source.buffer = audioBuffer;
-      source.connect(audioCtx.destination);
-      
-      activeSourcesRef.current.push(source);
-      
-      source.onended = () => {
-        activeSourcesRef.current = activeSourcesRef.current.filter(s => s !== source);
-        playNextChunk();
-      };
-      
-      source.start(0);
-    } catch (e) {
-      console.error("Error playing raw audio chunk", e);
-      playNextChunk();
-    }
-  };
-
-  // Interrupt AI speaking (Barge-In)
+  // Interrupt AI speaking (Barge-In): stop the Web Speech reply mid-sentence.
   const interruptAi = () => {
-    let interrupted = false;
-
-    // Stop ElevenLabs streaming audio sources
-    if (activeSourcesRef.current.length > 0) {
-      activeSourcesRef.current.forEach(source => {
-        try {
-          source.stop();
-        } catch (e) {}
-      });
-      activeSourcesRef.current = [];
-      interrupted = true;
-    }
-    
-    // Clear audio queue
-    audioQueueRef.current = [];
-    isPlayingAudioRef.current = false;
-    hasReceivedAudioEndRef.current = false;
-
-    // Cancel Web Speech TTS if speaking
     if (window.speechSynthesis && window.speechSynthesis.speaking) {
       window.speechSynthesis.cancel();
-      interrupted = true;
-    }
-
-    if (interrupted) {
       setIsAiSpeaking(false);
       setStatus('recording');
-      console.log('AI audio playback interrupted by user speech (Barge-In).');
+      console.log('AI speech interrupted by user speech (Barge-In).');
     }
   };
 
@@ -292,7 +196,6 @@ export function useVoiceChat() {
         
         // Sync initial state if provided, including the chosen model provider.
         const baseState = {
-          tts_mode: ttsModeRef.current,
           model_provider: modelProviderRef.current,
         };
         ws.send(JSON.stringify({
@@ -348,12 +251,6 @@ export function useVoiceChat() {
           // Progressive tokens streamed from the Groq agent; keep the
           // thinking indicator up until the final ai_text arrives.
           setIsAiThinking(true);
-        } else if (data.type === 'ai_audio_chunk') {
-          // Ignored: text-to-speech is handled client-side by the Web Speech API.
-        } else if (data.type === 'ai_audio_end') {
-          // no-op in Web Speech mode
-        } else if (data.type === 'ai_audio_none') {
-          // Client Web Speech handles playback; recording resumes on utterance end.
         } else if (data.type === 'error') {
           console.error('Server error:', data.message);
           setMessages((prev) => [
@@ -429,17 +326,7 @@ export function useVoiceChat() {
       audioStreamRef.current = null;
     }
 
-    // 3. Stop audio playback and cancel speech
-    if (activeSourcesRef.current.length > 0) {
-      activeSourcesRef.current.forEach(source => {
-        try { source.stop(); } catch(e){}
-      });
-      activeSourcesRef.current = [];
-    }
-    audioQueueRef.current = [];
-    isPlayingAudioRef.current = false;
-    hasReceivedAudioEndRef.current = false;
-
+    // 3. Cancel any reply still being spoken
     if (window.speechSynthesis) {
       window.speechSynthesis.cancel();
     }
@@ -501,11 +388,6 @@ export function useVoiceChat() {
     }
   };
 
-  // Sync TTS Mode changes
-  useEffect(() => {
-    sendStateUpdate({ tts_mode: ttsMode });
-  }, [ttsMode]);
-
   // Push model-provider changes to the backend so the switch takes effect on
   // the next turn without reconnecting (no-op if the socket isn't open yet).
   useEffect(() => {
@@ -537,8 +419,6 @@ export function useVoiceChat() {
     isAiSpeaking,
     isAiThinking,
     status,
-    ttsMode,
-    setTtsMode,
     modelProvider,
     setModelProvider,
     latestAction,
