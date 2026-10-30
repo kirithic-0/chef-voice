@@ -30,6 +30,11 @@ FALLBACK_MODEL = "llama-3.1-8b-instant"
 # Most turns need one tool call + a reply. Cap rounds low to save both requests
 # (free-tier daily caps) and tokens (each round re-sends the whole context).
 MAX_TOOL_ROUNDS = 2
+# Previous user turns sent with each request, each with its tool calls and reply.
+HISTORY_TURNS = 2
+# Tool results kept in history are cut to this length: enough for the model to
+# see what ran and how it went, without re-sending whole search results.
+HISTORY_TOOL_RESULT_CHARS = 400
 TOOL_CALL_TIMEOUT = 25.0
 STREAM_TIMEOUT = 45.0
 
@@ -107,6 +112,42 @@ def _build_chat_request(
     if extra_body:
         body.update(extra_body)
     return headers, body
+
+
+def _recent_turns(history: list[dict], turns: int) -> list[dict]:
+    """The last `turns` user turns of history, each with its tool calls and reply.
+
+    Slicing at user messages keeps an assistant tool_calls message together with
+    its tool results; providers reject a tool result with no matching call.
+    """
+    starts = [i for i, m in enumerate(history) if m.get("role") == "user"]
+    return history[starts[-turns:][0]:] if starts else []
+
+
+def _history_for_dialect(history: list[dict], api_style: str) -> list[dict]:
+    """Rewrite stored tool calls for the provider in use.
+
+    History keeps tool calls in OpenAI shape (arguments as a JSON string). Ollama
+    wants arguments as an object, and the user can switch models mid-session.
+    """
+    out = []
+    for m in history:
+        if m.get("tool_calls"):
+            calls = []
+            for c in m["tool_calls"]:
+                fn = c.get("function") or {}
+                args = _parse_tool_args(fn.get("arguments"))
+                if api_style == "ollama":
+                    calls.append({"function": {"name": fn.get("name"), "arguments": args}})
+                else:
+                    calls.append({
+                        "id": c.get("id"),
+                        "type": "function",
+                        "function": {"name": fn.get("name"), "arguments": json.dumps(args)},
+                    })
+            m = {**m, "tool_calls": calls}
+        out.append(m)
+    return out
 
 
 def _extract_message(api_style: str, data: dict) -> dict:
@@ -362,10 +403,16 @@ async def run_agent_turn(
     ctx: ToolContext,
     send_json: SendJson,
     model: str = DEFAULT_MODEL,
+    tool_trace: Optional[list[dict]] = None,
 ) -> str:
     """
     Run tool-calling rounds, emit ui_actions, then stream/speak final text.
-    Returns the final assistant text. Mutates history and ctx.cooking_state / ctx.ui_actions.
+    Returns the final assistant text. Mutates ctx.cooking_state / ctx.ui_actions.
+
+    If `tool_trace` is given, the tools this turn ran are appended to it as an
+    assistant tool_calls message plus tool results, ready to store in history.
+    Without them, history holds replies like "I've cancelled the timer" with no
+    sign of the call behind them, and the model learns to act by just saying so.
     """
     t0 = time.time()
     ctx.ui_actions.clear()
@@ -389,9 +436,11 @@ async def run_agent_turn(
     system = build_system_prompt(ctx.cooking_state)
     messages: list[dict] = [
         {"role": "system", "content": system},
-        *history[-4:],
+        *_history_for_dialect(_recent_turns(history, HISTORY_TURNS), api_style),
         {"role": "user", "content": user_text},
     ]
+    # (call_id, name, args, result) for every tool run this turn, for tool_trace.
+    ran: list[tuple[str, str, dict, Any]] = []
     # Offer only the tools relevant to the current screen (fewer schema tokens).
     active_tools = tools_for_screen(ctx.cooking_state.get("screen"))
 
@@ -459,6 +508,7 @@ async def run_agent_turn(
                 # Surface the tool call in the UI (immersive "the agent is doing X").
                 await send_json({"type": "ai_tool_call", "name": name, "args": args})
                 result = await execute_tool(name, args, ctx)
+                ran.append((call_id, name, args, result))
                 # Emit UI actions produced by this tool so far
                 while ctx.ui_actions:
                     action = ctx.ui_actions.pop(0)
@@ -493,6 +543,7 @@ async def run_agent_turn(
             for i, (name, args) in enumerate(inline_calls):
                 await send_json({"type": "ai_tool_call", "name": name, "args": args})
                 result = await execute_tool(name, args, ctx)
+                ran.append((f"inline_{i}", name, args, result))
                 while ctx.ui_actions:
                     action = ctx.ui_actions.pop(0)
                     await send_json({"type": "ai_action", "action": action})
@@ -556,6 +607,22 @@ async def run_agent_turn(
     while ctx.ui_actions:
         action = ctx.ui_actions.pop(0)
         await send_json({"type": "ai_action", "action": action})
+
+    if tool_trace is not None and ran:
+        tool_trace.append({
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": call_id, "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}
+                for call_id, name, args, _ in ran
+            ],
+        })
+        for call_id, _, _, result in ran:
+            tool_trace.append({
+                "role": "tool",
+                "tool_call_id": call_id,
+                "content": json.dumps(result)[:HISTORY_TOOL_RESULT_CHARS],
+            })
 
     elapsed = time.time() - t0
     _log(f"[agent] turn complete in {elapsed:.2f}s text_len={len(final_text)}")

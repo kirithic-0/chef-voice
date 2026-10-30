@@ -73,6 +73,10 @@ export function useVoiceChat() {
 
   const isAiThinkingRef = useRef(false);
   const isAiSpeakingRef = useRef(false);
+  // The reply currently being spoken. Cancelling speech fires the utterance's
+  // onend/onerror later, asynchronously; callbacks from an utterance that is no
+  // longer current are ignored so they can't overwrite newer state.
+  const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
   const modelProviderRef = useRef<ModelProvider>('llama');
 
   useEffect(() => {
@@ -103,25 +107,29 @@ export function useVoiceChat() {
 
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
+    utteranceRef.current = utterance;
     const voice = getPreferredVoice();
     if (voice) {
       utterance.voice = voice;
     }
 
     utterance.onstart = () => {
+      if (utteranceRef.current !== utterance) return;
       setIsAiSpeaking(true);
       setStatus('isAiSpeaking');
     };
 
-    utterance.onend = () => {
+    // Without the guard, stop() cancelling a reply mid-sentence let this fire
+    // after the session ended and set status back to 'recording'. The assistant
+    // then looked live, so opening it skipped start() and the mic never opened.
+    const finished = () => {
+      if (utteranceRef.current !== utterance) return;
+      utteranceRef.current = null;
       setIsAiSpeaking(false);
       setStatus('recording');
     };
-
-    utterance.onerror = () => {
-      setIsAiSpeaking(false);
-      setStatus('recording');
-    };
+    utterance.onend = finished;
+    utterance.onerror = finished;
 
     window.speechSynthesis.speak(utterance);
   };
@@ -326,7 +334,9 @@ export function useVoiceChat() {
       audioStreamRef.current = null;
     }
 
-    // 3. Cancel any reply still being spoken
+    // 3. Cancel any reply still being spoken. Drop the ref first so the
+    // cancelled utterance's late onend/onerror is ignored.
+    utteranceRef.current = null;
     if (window.speechSynthesis) {
       window.speechSynthesis.cancel();
     }

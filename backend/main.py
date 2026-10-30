@@ -522,12 +522,14 @@ async def websocket_chat(client_ws: WebSocket):
         try:
             # OpenAI-compatible tool-calling agent: emits ai_action /
             # ai_text_partial events via send_json and returns the spoken reply.
+            tool_trace: list[dict] = []
             ai_reply = await run_agent_turn(
                 user_text=combined_transcript,
                 history=history[:-1],  # agent re-appends the user message itself
                 ctx=ctx,
                 send_json=client_ws.send_json,
                 model=provider["model"],
+                tool_trace=tool_trace,
             )
 
             if not ai_reply:
@@ -535,6 +537,9 @@ async def websocket_chat(client_ws: WebSocket):
 
             # The browser speaks ai_text itself with the Web Speech API.
             await client_ws.send_json({"type": "ai_text", "text": ai_reply})
+            # Keep the tool calls next to the reply so later turns see that
+            # actions were taken through tools, not just described.
+            history.extend(tool_trace)
             history.append({"role": "assistant", "content": ai_reply})
 
         except httpx.TimeoutException as te:
