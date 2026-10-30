@@ -1,5 +1,7 @@
 # ChefVoice App
 
+**[▶ Watch the demo video](https://drive.google.com/drive/folders/1M3kIV9_FeZnbnX2uxut2ieVLJZ2Htbzl)**
+
 ![ChefVoice home screen](./docs/screenshots/01-home.jpg)
 
 A voice-first AI cooking assistant with real-time audio streaming, semantic recipe search, and a conversational web UI.
@@ -15,12 +17,12 @@ Navigate cooking steps hands-free, set smart timers, ask questions about ingredi
 | **Hands-Free Navigation** | Navigate through recipe steps completely hands-free using natural language commands like "next step" or "what was the first step?". |
 | **Barge-In Capabilities** | The assistant is truly conversational. Interrupt the AI mid-sentence and it will instantly stop talking and listen to your new command. |
 | **Spoken Responses** | The browser Web Speech API voices the assistant's replies — instant, and no cloud TTS key required. |
-| **Hybrid Search (RAG)** | Dense retrieval (`all-MiniLM-L6-v2` embeddings, cosine similarity over a cached NumPy matrix) fused with lexical BM25 (SQLite FTS5) via Reciprocal Rank Fusion, with synonym expansion, metadata pre-filtering (diet, cook time), and score thresholds — type "spicy creamy curry" and get the right dishes even without keyword matches. Measured against a golden set in `backend/eval/`. |
-| **Tool-Calling Agent** | A multi-round tool-calling loop over 10 server-side tools — recipe search, recipe details and selection, starting a cooking session, step navigation, current step, timers (set/cancel), cooking history, and URL import. The tool set is scoped to the current screen (6 on home, 4 while cooking) so the model only sees tools that make sense right now. |
+| **Hybrid Search (RAG)** | Dense retrieval (`all-MiniLM-L6-v2` embeddings, cosine similarity over a cached NumPy matrix) fused with lexical BM25 (SQLite FTS5) via Reciprocal Rank Fusion, with synonym expansion, metadata pre-filtering (diet, cook time), and score thresholds — type "spicy creamy curry" and get the right dishes even without keyword matches, and get nothing back for off-topic queries. |
+| **Tool-Calling Agent** | A multi-round tool-calling loop over 10 server-side tools — recipe search, recipe details and selection, starting a cooking session, step navigation, current step, timers (set/cancel), cooking history, and URL import. The tool set is scoped to the current screen (6 on home, 4 while cooking) so the model only sees tools that make sense right now. Each turn's tool calls are kept in the conversation history, so the model sees that past actions went through tools and doesn't start claiming actions it never took. |
 | **Selectable LLM** | Pick the model from the assistant's model selector: **GPT-OSS 120B** on Groq (fast, default, with automatic fallback to GPT-OSS 20B on timeouts), or a fully **local Gemma 4 26B** served by [Ollama](https://ollama.com/) — no API key, runs on your own machine, and auto-splits across VRAM + RAM when it doesn't fit the GPU. Groq is OpenAI-compatible; the local option speaks Ollama's native API (so its reasoning phase can be switched off for snappy replies), and the agent loop handles both. |
 | **Shopping List** | A per-user shopping list panel — add, check off, and remove items, persisted in SQLite. |
 | **Recipe Import** | Paste a recipe URL (or ask by voice); the agent scrapes the page, extracts structured recipe JSON, embeds it, and adds it to the catalogue. |
-| **Speech-to-Text Input** | Deepgram `nova-2` streaming API provides sub-second, highly accurate transcription of continuous audio streams. |
+| **Speech-to-Text Input** | Deepgram `nova-2` streaming transcription with interim results, so your words appear while you're still speaking. |
 | **Intelligent Timers** | Context-aware timer management (e.g., "set a timer for the pasta"). Timers are fully controllable via voice. |
 | **Local Auth & Profiles** | Self-hosted JWT authentication (bcrypt-hashed passwords). Favorites, cooking history, ratings, and an admin recipe portal are all scoped per user. |
 
@@ -147,7 +149,7 @@ On a fresh machine, expect the Python install to download about 1 GB (mostly PyT
 | **Vite** | Build tool and dev server |
 | **Tailwind CSS 4** | Utility-first CSS styling and responsive design |
 | **Web Audio API** | Low-latency audio capture and custom waveform visualization |
-| **Web Speech API** | Fallback client-side speech synthesis |
+| **Web Speech API** | Speaks the assistant's replies in the browser (no cloud text-to-speech) |
 
 ### Data Layer
 All persistence lives in a single SQLite file (`backend/chefvoice.db`) with tables for
@@ -172,8 +174,8 @@ layer by scoping every query to the authenticated user id from the JWT.
 ### WebSocket — `/ws/chat?token=<jwt>`
 Real-time conversational voice interaction, streaming audio in and out.
 
-* **Client → Server**: Client streams raw microphone audio captured via the Web Audio API, plus JSON control frames for cooking-state sync and text input.
-* **Server → Client**: Server transcribes the audio, runs the Groq tool-calling agent, and streams back the agent's text tokens plus structured tool/UI events (timers, step navigation, shopping-list updates, etc.). The browser speaks the final reply with the Web Speech API.
+* **Client → Server**: Client streams microphone audio as WebM/Opus chunks from `MediaRecorder`, plus JSON control frames for cooking-state sync and text input.
+* **Server → Client**: Server transcribes the audio, runs the tool-calling agent, and streams back the agent's text tokens plus structured tool/UI events (timers, step navigation, search results, etc.). The browser speaks the final reply with the Web Speech API.
 
 ### REST — Recipes, Profile, Favorites, History
 All REST endpoints require an `Authorization: Bearer <jwt>` header.
@@ -182,7 +184,7 @@ All REST endpoints require an `Authorization: Bearer <jwt>` header.
 | --- | --- | --- |
 | `/providers` | `GET` | List the LLM providers and whether each is configured/reachable (drives the model selector) |
 | `/recipes` | `GET` | Fetch all recipes |
-| `/recipes/search?query=...` | `GET` | Semantic vector search |
+| `/recipes/search?query=...` | `GET` | Hybrid search (embeddings + BM25 keywords) |
 | `/recipes/{id}` | `GET` | Fetch a specific recipe |
 | `/recipes` | `POST` | Create a recipe (admin only; embedding generated server-side) |
 | `/recipes/{id}` | `DELETE` | Delete a recipe (admin only) |
@@ -217,13 +219,15 @@ npm test
 Test coverage includes:
 * Recipe fetching and structure validation
 * Hybrid retrieval precision, filtering, and thresholds (`test_retrieval.py`)
-* The tool-calling agent loop and its 15 tools (`test_agent.py`, `test_tools.py`)
+* The tool-calling agent loop and its 10 tools (`test_agent.py`, `test_tools.py`)
 * Authentication and per-user authorization (`test_backend.py`, `test_authz.py`)
 * 404 handling for unknown recipes
 
-Retrieval quality can also be scored against a golden query set:
+There is also an offline retrieval evaluation script:
 
 ```bash
 cd backend
 python eval/evaluate.py
 ```
+
+Its query set was generated with an AI assistant and the search thresholds were tuned on it, so its scores are in-sample and not a real measure of search quality.
